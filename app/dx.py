@@ -38,8 +38,8 @@ class Dx(object):
     def find_projects(self, name, mode='glob'):
         return list(dxpy.find_projects(describe=True, name=name, name_mode=mode))
 
-    def find_files(self, name, mode='glob'):
-        return list(dxpy.bindings.search.find_data_objects(classname="file",name=name,name_mode=mode))
+    def find_files(self, name, mode='glob', *args, **kwargs):
+        return list(dxpy.bindings.search.find_data_objects(classname="file",name=name,name_mode=mode,**kwargs))
 
     def list_outputs(self,project_id):
         # get project instance
@@ -58,11 +58,31 @@ class Dx(object):
         # return files
         return files
 
-    def file_url(self, project_id, file_id):
+    def get_project(self, project_id):
+        project = dxpy.bindings.dxproject.DXProject(dxid=project_id)
+        return project.describe()
+
+    def get_file(self, project_id, file_id):
+        remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)
+        return remote_handler.describe()
+
+    def unarchive(self, project_id, file_id):
+        remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)
+        if remote_handler.describe()['archivalState'] == 'archived':
+            remote_handler.unarchive()
+            return True
+
+    def archive(self, project_id, file_id):
+        remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)
+        if remote_handler.describe()['archivalState'] == 'live':
+            remote_handler.archive()
+            return True
+
+    def file_url(self, project_id, file_id, valid_hours=URL_HOURS):
         remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)
         d = remote_handler.describe()
         try:
-            file_url = remote_handler.get_download_url(duration=URL_HOURS*3600, preauthenticated=True, filename=d['name'], project=project_id)
+            file_url = remote_handler.get_download_url(duration=valid_hours*3600, preauthenticated=True, filename=d['name'], project=project_id)
         except dxpy.exceptions.InvalidState:
             return { "name": d['name'], "url": None, "state": d['archivalState'] }
         except Exception as e:
