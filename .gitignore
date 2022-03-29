@@ -4,3 +4,4 @@
 .ipynb_checkpoints/*
 hs37d5.*
 refgene*
+.vscode/*

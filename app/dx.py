@@ -35,11 +35,11 @@ class Dx(object):
         dxpy.set_security_context(json.loads(sec_context))
         self.whoami = dxpy.api.system_whoami()
 
-    def find_projects(self, name, mode='glob'):
-        return list(dxpy.find_projects(describe=True, name=name, name_mode=mode))
+    def find_projects(self, name, mode='glob', *args, **kwargs):
+        return list(dxpy.bindings.search.find_projects(name=name, name_mode=mode, describe=True, *args, **kwargs))
 
     def find_files(self, name, mode='glob', *args, **kwargs):
-        return list(dxpy.bindings.search.find_data_objects(classname="file",name=name,name_mode=mode,**kwargs))
+        return list(dxpy.bindings.search.find_data_objects(classname="file",name=name,name_mode=mode, *args, **kwargs))
 
     def list_outputs(self,project_id):
         # get project instance
@@ -77,6 +77,10 @@ class Dx(object):
         if remote_handler.describe()['archivalState'] == 'live':
             remote_handler.archive()
             return True
+
+    def update_project(self, project_id, **kwargs):
+        project = dxpy.bindings.dxproject.DXProject(dxid=project_id)
+        project.update(**kwargs)
 
     def file_url(self, project_id, file_id, valid_hours=URL_HOURS):
         remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)
