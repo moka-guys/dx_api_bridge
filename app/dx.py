@@ -41,6 +41,9 @@ class Dx(object):
     def find_files(self, name, mode='glob', *args, **kwargs):
         return list(dxpy.bindings.search.find_data_objects(classname="file",name=name,name_mode=mode, *args, **kwargs))
 
+    def find_objects(self, name, mode='glob', *args, **kwargs):
+        return list(dxpy.bindings.search.find_data_objects(name=name, name_mode=mode, *args, **kwargs))
+
     def list_outputs(self,project_id):
         # get project instance
         project = dxpy.bindings.dxproject.DXProject(dxid=project_id)
@@ -72,10 +75,10 @@ class Dx(object):
             remote_handler.unarchive()
             return True
 
-    def archive(self, project_id, file_id):
+    def archive(self, project_id, file_id, all_copies=False):
         remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)
         if remote_handler.describe()['archivalState'] == 'live':
-            remote_handler.archive()
+            remote_handler.archive(all_copies=all_copies)
             return True
 
     def update_project(self, project_id, **kwargs):
@@ -94,3 +97,9 @@ class Dx(object):
 
         expires = datetime.datetime.now() + datetime.timedelta(hours=URL_HOURS)
         return { "name": d['name'], "url": file_url[0], "expires": expires.isoformat() }
+
+    def find_executions(self, name, mode='glob', *args, **kwargs):
+        return list(dxpy.bindings.search.find_executions(name=name, name_mode=mode, describe=True, *args, **kwargs))
+
+    def get_file_projects(self, object_id, *args, **kwargs):
+        return list(dxpy.api.file_list_projects(object_id, input_params={}, always_retry=True, **kwargs))
