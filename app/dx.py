@@ -15,16 +15,18 @@ search for files belonging to sample
 return current URIs for Data objects (VCF, TBI, BAM, BAI only)
 '''
 
+#                        Lib   Cnt   DNA   ID2    INITIALS    Sex        PNm   Pan
+swift_sample_regex = r'((\w+)_(\d+)_(\w+)_(\w+_)?([A-Z]{2}_)?([MFU]x]_)?(\w+)_(Pan\d+))_'
+tso_sample_regex = r'(.+)_UP\d+_.+\.vcf'
+DATA_FOLDERS = { '/output': swift_sample_regex, '/analysis_folder/Results': tso_sample_regex }
 URL_HOURS = 12
 
-#                            Lib   Cnt   DNA   ID2    INITIALS    Sex        PNm   Pan
-sample_regex = r'((\w+)_(\d+)_(\w+)_(\w+_)?([A-Z]{2}_)?([MFU]x]_)?(\w+)_(Pan\d+))_'
-sample_regex_compiled = re.compile(sample_regex)
 
 def get_sample_name(filename):
-    m = sample_regex_compiled.match(filename)
-    if m:
-        return m.group(1)
+    for regex in DATA_FOLDERS.values():
+        m = re.match(regex, filename)
+        if m:
+            return m.group(1)
 
 class Dx(object):
     def __init__(self,token):
@@ -40,15 +42,21 @@ class Dx(object):
         return list(dxpy.bindings.search.find_data_objects(classname="file",name=name,name_mode=mode))
 
     def list_outputs(self,project_id):
-        # check if output folder exists
-        try:
-            assert '/output' in dxpy.bindings.dxfile_functions.list_subfolders(project_id, '/', recurse=False)
-        except AssertionError:
-            return []
-        # return project_id
+        # get project instance
         project = dxpy.bindings.dxproject.DXProject(dxid=project_id)
-        files = project.list_folder('/output', describe=True, only='objects')
-        return files['objects']
+        # check if output folder exists
+        subfolders = dxpy.bindings.dxfile_functions.list_subfolders(project_id, '/', recurse=True)
+        matched_folders = list(filter(lambda f: any(f == df for df in DATA_FOLDERS), subfolders))
+        # get files from matched folder
+        files = []
+        for folder in matched_folders:
+            # sample_regex
+            found_files = dxpy.bindings.search.find_data_objects(classname='file', state='closed', visibility='visible', \
+                name=DATA_FOLDERS[folder], name_mode=u'regexp', project=project_id, folder=folder, recurse=True, \
+                describe=True)
+            files += list(found_files)
+        # return files
+        return files
 
     def file_url(self, project_id, file_id):
         remote_handler = dxpy.bindings.dxfile.DXFile(file_id, project_id)

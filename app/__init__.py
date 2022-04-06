@@ -57,7 +57,7 @@ def project(dx, dx_project):
             grouped[sample_name].append(f)
     result = []
     for sample, files in grouped.items():
-        result.append({ "sample": sample, "files": list(map(lambda x: x['describe'], files)) })
+        result.append({ "name": sample, "files": list(map(lambda x: x['describe'], files)) })
     return jsonify(result)
 
 '''
