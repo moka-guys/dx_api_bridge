@@ -322,11 +322,11 @@ def main(args):
 
                     # rename project
                     if args.rename:
-                        new_project_name = re.sub(args.match, args.rename, project['describe']['name'])
+                        new_project_name = re.sub(args.project, args.rename, project['describe']['name'])
                         if not args.dryrun:
                             dx.update_project(project['id'], name=new_project_name)
                         else:
-                            print(f'\nWould rename project {project["describe"]["name"]} to {new_project_name}', end='')
+                            print(f'Would rename project {project["describe"]["name"]} to {new_project_name}')
                 
 
 if __name__ == "__main__":
@@ -356,11 +356,13 @@ if __name__ == "__main__":
     
     parser_archiving = parser_find.add_argument_group('Archiving')
     parser_archiving.add_argument("--archive", action="store_true", help="Archives projects/files")
-    parser_archiving.add_argument("--unarchive", action="store_true", help="Unarchives projects/files")
     parser_archiving.add_argument("--all", action="store_true", help="Forces archival of all copies of a given file (used with --archive)")
-    parser_archiving.add_argument("--rename", help="Rename matched pattern (e.g. 802_). Only works for projects!", type=str, default=None)
+    parser_archiving.add_argument("--rename", help="Rename projects matched pattern (e.g. 802_). Only effective when archviing projects!", type=str, default=None)
     parser_archiving.add_argument("--dryrun", action="store_true", help="Dry-run (used with --archive)")
     
+    parser_unarchiving = parser_find.add_argument_group('Unarchiving')
+    parser_unarchiving.add_argument("--unarchive", action="store_true", help="Unarchives projects/files")
+
     parser_updating = parser_find.add_argument_group('Updating')
     parser_updating.add_argument("--tag", help="Add file tags", metavar="TAG1,TAG2,...", type=str)
     parser_updating.add_argument("--untag", help="Remove file tags", metavar="TAG1,TAG2,...", type=str)

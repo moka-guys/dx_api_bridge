@@ -144,7 +144,7 @@ def main(args):
 
 
 if __name__=="__main__":
-    parser = argparse.ArgumentParser(description="Extracts Variant calls from DNAnexus projects")
+    parser = argparse.ArgumentParser(description="Extracts Sanger results calls from Excel Files")
     parser.add_argument("-d", "--directory", help="Search Folder containing XLSX", required=True)
     parser.add_argument("-o", "--output", help="output file (default to STDOUT)")
 
