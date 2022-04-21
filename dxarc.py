@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 
 from collections import defaultdict, Counter
@@ -16,6 +15,7 @@ from pyfaidx import Fasta
 from tqdm.auto import tqdm
 from functools import cache
 from progress.bar import Bar
+from dotenv import load_dotenv
 
 WORKSTATION_COLUMNS = ['id', 'region', 'billTo', 'state', 'launchedBy', 'instanceType', 'totalPrice']
 
@@ -23,6 +23,9 @@ COST_COLUMNS = ['project-name', 'project-id', 'created', 'modified', 'dataUsage'
 COMPUTE_COLUMNS = ['job','launchedBy','workflowName','region','executableName','billTo','state','instanceType','totalPrice']
 
 DEPENDENCY_TAG = 'dependency'
+
+load_dotenv()
+DX_API_TOKEN = os.getenv('DX_API_TOKEN')
 
 def as_date(epoch):
     '''
@@ -333,7 +336,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Project Archiving Tool")
     
     parser_global = parser.add_argument_group('Global Options')
-    parser_global.add_argument("--token", help="DNAnexus access token", required=True)
+    parser_global.add_argument("--token", help="DNAnexus access token", default=DX_API_TOKEN)
     parser_global.add_argument("--output", help="Output file (defaults to STDOUT)", default=None)
 
     parser_main = parser.add_argument_group('Main Options')
@@ -376,5 +379,8 @@ if __name__ == "__main__":
 
     if args.find and not (args.project or args.object):
         parser.error("--project and/or --object is required with -f")
+
+    if not args.token:
+        parser.error("Supply access token or set the DX_API_TOKEN environment variable.")
 
     main(args)
