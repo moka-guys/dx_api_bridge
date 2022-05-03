@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 
-from collections import defaultdict, Counter
+from collections import Counter
 import sys
 import os
 import re
-import csv
 import time
 import argparse
 import pandas as pd
 from dxpy.exceptions import InvalidAuthentication
 import dxpy
 from app.dx import *
-from pyfaidx import Fasta
 from tqdm.auto import tqdm
-from functools import cache
-from progress.bar import Bar
 from dotenv import load_dotenv
 
 WORKSTATION_COLUMNS = ['id', 'region', 'billTo', 'state', 'launchedBy', 'instanceType', 'totalPrice']
@@ -51,16 +47,13 @@ class DataFile(object):
         self.data = pd.read_csv(self.file)
 
     def append(self,dict):
-        self.data = self.data.append(dict, ignore_index=True)
+        self.data = pd.concat([self.data, pd.DataFrame(dict, index=[0])], ignore_index=True)
 
     def commit(self):
         if self.file:
             return self.data.to_csv(self.file, sep="\t", index=False)
         print(self.data)
 
-
-def remove_if_in_project(file_ids, project_regex):
-    pass
 
 def main(args):
     """
@@ -93,6 +86,7 @@ def main(args):
             for col in WORKSTATION_COLUMNS:
                 data[col] = workstation['describe'][col]
             df.append(data)
+        # write dataframe to file/screen
         df.commit()
         sys.exit(0)
 
@@ -129,6 +123,7 @@ def main(args):
             if args.follow:
                 followed_objects = []
                 print(f'Following {len(objects)} objects into other projects...')
+                # iterate over objects list and show progress
                 for object in tqdm(objects):
                     file_projects = dx.get_file_projects(object['id'])
                     for p in file_projects:
@@ -192,7 +187,7 @@ def main(args):
                 print(f'Unarchiving {len(files)}...', file=sys.stderr)
                 for file in tqdm(files):
                     if args.dryrun:
-                        print(f'Would archive {file["id"]} in {file["project"]}...')
+                        print(f'Would unarchive {file["id"]} in {file["project"]}...')
                     else:
                         if not dx.unarchive(file['project'], file['id']):
                             print(f'Failed to unarchive {file["id"]} in {file["project"]}. Check permissions.')
@@ -284,6 +279,7 @@ def main(args):
             sum_data = df.data['dataUsage'].sum()
             sum_ark  = df.data['archivedDataUsage'].sum()
             sum_live = sum_data - sum_ark
+            # print formatted numeric outputs
             print(f'Archived size:      {sum_ark:12.3f} GB')
             print(f'Live size:          {sum_live:12.3f} GB\n')
             print(f'Total storage cost: ${sum_cost:10.2f}')
