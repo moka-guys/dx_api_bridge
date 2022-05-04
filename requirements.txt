@@ -1,14 +1,14 @@
 argcomplete==2.0.0
 certifi==2021.10.8
 cffi==1.15.0
-chardet==3.0.4
+chardet==4.0.0
 charset-normalizer==2.0.12
 click==8.1.2
 cryptography==36.0.2
 dxpy==0.322.1
 Flask==2.1.1
 gnureadline==8.0.0
-gunicorn==19.10.0
+gunicorn==20.1.0
 idna==3.3
 importlib-metadata==4.11.3
 itsdangerous==2.1.2
