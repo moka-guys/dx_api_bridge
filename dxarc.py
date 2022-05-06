@@ -9,6 +9,8 @@ import argparse
 import pandas as pd
 from dxpy.exceptions import InvalidAuthentication
 import dxpy
+import logging
+from logging.config import dictConfig
 from app.dx import *
 from tqdm.auto import tqdm
 from dotenv import load_dotenv
@@ -17,11 +19,14 @@ WORKSTATION_COLUMNS = ['id', 'region', 'billTo', 'state', 'launchedBy', 'instanc
 
 COST_COLUMNS = ['project-name', 'project-id', 'created', 'modified', 'dataUsage', 'archivedDataUsage', 'storageCost', 'billedTo', 'computeCost', 'estComputeCostPerSample']
 COMPUTE_COLUMNS = ['job','launchedBy','workflowName','region','executableName','billTo','state','instanceType','totalPrice']
-
+ORG_COLUMNS = ['id','estSpendingLimitLeft', 'computeCharges', 'storageCharges', 'dataEgressCharges']
 DEPENDENCY_TAG = 'dependency'
 
+
+# load environment
 load_dotenv()
 DX_API_TOKEN = os.getenv('DX_API_TOKEN')
+
 
 def as_date(epoch):
     '''
@@ -55,10 +60,57 @@ class DataFile(object):
         print(self.data)
 
 
+def setup_logger(use_syslog):
+    '''
+    Sets up logger and optionally logs to SYSLOG (Linux only)
+    
+    input:
+        use_syslog: bool
+    
+    output:
+        logger: logging.Logger
+    '''
+    logging_config = {
+        'version': 1,
+        'formatters': {
+            'default': {
+                'format': "{asctime} {name}.{module}: {levelname} - {message}",
+                'style': '{',
+                'datefmt': r'%Y-%m-%d %H:%M:%S'
+            }
+        },
+        'handlers': { },
+        'root': { 'handlers': [], 'level': logging.DEBUG }
+    }
+    # add handler if available (LINUX only)
+    SYSLOG_PATH = '/dev/log'
+    if use_syslog and os.path.exists(SYSLOG_PATH):
+        logging_config['handlers']['syslog_handler'] = {
+            'class': 'logging.handlers.SysLogHandler',
+            'formatter': 'default',
+            'level': logging.DEBUG,
+            'address': SYSLOG_PATH
+        }
+        logging_config['root']['handlers'].append('syslog_handler')
+    else:
+        logging_config['handlers']['stream_handler'] = {
+            'class': 'logging.StreamHandler',
+            'formatter': 'default',
+            'level': logging.DEBUG
+        }
+        logging_config['root']['handlers'].append('stream_handler')
+    # setup and return logger
+    dictConfig(logging_config)
+    return logging.getLogger()
+
+
 def main(args):
     """
     Main function
     """
+
+    # setup logger
+    logger = setup_logger(args.syslog)
 
     # init progress reporter for pandas operations
     tqdm.pandas()
@@ -67,7 +119,7 @@ def main(args):
     try:
         dx = Dx(args.token)
     except InvalidAuthentication:
-        print("Authentication token could not be validated")
+        logger.error("Authentication token could not be validated")
         sys.exit(1)
 
     # argument transformations (time intervals, tag lists)
@@ -80,7 +132,7 @@ def main(args):
         df = DataFile(args.output, WORKSTATION_COLUMNS)
         workstations = dx.workstations(after=after, before=before)
         # get workstations (workstation app executions)
-        print(f'Found {len(workstations)} workstations')
+        logger.info(f'Found {len(workstations)} cloud workstations')
         for workstation in workstations:
             data = {}
             for col in WORKSTATION_COLUMNS:
@@ -92,9 +144,14 @@ def main(args):
 
     # show orgs
     if args.orgs:
+        df = DataFile(args.output, ORG_COLUMNS)
         orgs = list(dxpy.bindings.search.find_orgs({'level': 'MEMBER', 'describe': True}))
         for org in orgs:
-            print(json.dumps(org, indent=2))
+            data = {}
+            for col in ORG_COLUMNS:
+                data[col] = org['describe'][col]
+            df.append(data)
+        df.commit()
         sys.exit(0)
 
     # datafile (output)
@@ -109,20 +166,20 @@ def main(args):
             if args.project:
                 projs = dx.find_projects(args.project, mode='regexp')
                 if len(projs) != 1:
-                    print(f'Found {len(projs)} projects matching {args.project}, expected 1')
+                    logger.error(f'Found {len(projs)} projects matching {args.project}, expected 1')
                     sys.exit(1)
                 project = projs[0]['id']
-                print(f'Found project {projs[0]["describe"]["name"]} ({project})')
+                logger.info(f'Found project {projs[0]["describe"]["name"]} ({project})')
             # find objects
             objects = list(dx.find_objects(args.object, mode='regexp', project=project, describe=True, \
                 visibility=args.visibility, tags=tags, classname=args.type, \
                 modified_after=after, modified_before=before, limit=args.limit))
-            print(f'Found {len(objects)} objects matching {args.object}')
+            logger.info(f'Found {len(objects)} objects matching {args.object}')
             
             # follow objects into other projects (finds other isntances of found files) e.g. allows to find files ina project and then tag/archive etc all copies of it
             if args.follow:
                 followed_objects = []
-                print(f'Following {len(objects)} objects into other projects...')
+                logger.info(f'Following {len(objects)} objects into other projects...')
                 # iterate over objects list and show progress
                 for object in tqdm(objects):
                     file_projects = dx.get_file_projects(object['id'])
@@ -131,13 +188,13 @@ def main(args):
                             f = dx.get_file(p, object['id'])
                             followed_objects.append({'id': f['id'], 'project': f['project'], 'describe': f})
                 objects += followed_objects
-                print(f'Added {len(followed_objects)} objects from other projects')
+                logger.info(f'Added {len(followed_objects)} objects from other projects')
 
             # remove excluded objects
             if args.notin:
                 exclude_files = dx.project_file_ids(args.notin)
                 not_excluded_objects = list(filter(lambda x: x['id'] not in exclude_files, objects))
-                print(f'Removed {len(objects) - len(not_excluded_objects)} objects as they are contained in {args.notin}')
+                logger.info(f'Removed {len(objects) - len(not_excluded_objects)} objects as they are contained in {args.notin}')
                 objects = not_excluded_objects
 
             # print found objects
@@ -170,7 +227,7 @@ def main(args):
                 })
             df.commit()
             df.data.sort_values(by=['object'], inplace=True)
-            print(f'There are {len(fileids)} unique in a total of {len(df.data)} files')
+            logger.debug(f'There are {len(fileids)} unique in a total of {len(df.data)} files')
 
             # archiving
             if args.archive:
@@ -178,39 +235,46 @@ def main(args):
                 print(f'Archiving {len(files)}...', file=sys.stderr)
                 for file in tqdm(files):
                     if args.dryrun:
-                        print(f'Would archive {file["id"]} in {file["project"]}...')
+                        logger.debug(f'Would archive {file["id"]} in {file["project"]}')
                     else:
                         if not dx.archive(file['project'], file['id'], args.all):
-                            print(f'Failed to archive {file["id"]} in {file["project"]}. Check permissions.')
+                            logger.warn(f'Failed to archive {file["id"]} in {file["project"]}. Check permissions.')
+                        else:
+                            logger.info(f'Archived {file["id"]} in {file["project"]}')
             elif args.unarchive:
                 files = list(filter(lambda x: x['describe']['class'] == 'file' and x['describe']['archivalState'] != 'live', objects))
                 print(f'Unarchiving {len(files)}...', file=sys.stderr)
                 for file in tqdm(files):
                     if args.dryrun:
-                        print(f'Would unarchive {file["id"]} in {file["project"]}...')
+                        logger.debug(f'Would unarchive {file["id"]} in {file["project"]}')
                     else:
                         if not dx.unarchive(file['project'], file['id']):
-                            print(f'Failed to unarchive {file["id"]} in {file["project"]}. Check permissions.')
+                            logger.warn(f'Failed to unarchive {file["id"]} in {file["project"]}. Check permissions.')
+                        else:
+                            logger.info(f'Unarchived {file["id"]} in {file["project"]}')
+
 
             # tagging
             if args.tag or args.untag:
                 tags = args.tag.split(',') if args.tag else None
                 untags = args.untag.split(',') if args.untag else None
-                print(f'Changing tags for {len(objects)} objects (+{args.tag} -{args.untag})...', file=sys.stderr)
+                logger.info(f'Changing tags for {len(objects)} objects (+{args.tag} -{args.untag})...', file=sys.stderr)
                 for obj in tqdm(objects):
                     classname = obj['describe']['class']
                     if tags:
                         tag_fun = f'{classname}_add_tags'
                         if args.dryrun:
-                            print(f'Would tag {obj["id"]} in {obj["project"]} with {args.tag}...')
+                            logger.debug(f'Would tag {obj["id"]} in {obj["project"]} with {args.tag}')
                         else:
+                            logger.info(f'Tagging {obj["id"]} in {obj["project"]} with {args.tag}')
                             change_tag = getattr(dxpy.api, tag_fun)
                             change_tag(obj["id"], { 'tags': tags, 'project': obj["project"] })
                     if untags:
                         tag_fun = f'{classname}_remove_tags'
                         if args.dryrun:
-                            print(f'Would untag {obj["id"]} in {obj["project"]} with {args.untag}...')
+                            logger.debug(f'Would untag {obj["id"]} in {obj["project"]} with {args.untag}')
                         else:
+                            logger.info(f'Untagging {obj["id"]} in {obj["project"]} with {args.untag}')
                             change_tag = getattr(dxpy.api, tag_fun)
                             change_tag(obj["id"], { 'tags': untags, 'project': obj["project"] })
         
@@ -218,7 +282,7 @@ def main(args):
         elif args.project:
             # get projects
             projects = dx.find_projects(f'{args.project}', mode='regexp', created_after=after, created_before=before)
-            print(f'Found {len(projects)} projects')  
+            logger.info(f'Found {len(projects)} projects (matching {args.project}, before {before}, after {after})')
 
             # audit
             for project in tqdm(projects):
@@ -280,12 +344,12 @@ def main(args):
             sum_ark  = df.data['archivedDataUsage'].sum()
             sum_live = sum_data - sum_ark
             # print formatted numeric outputs
-            print(f'Archived size:      {sum_ark:12.3f} GB')
-            print(f'Live size:          {sum_live:12.3f} GB\n')
-            print(f'Total storage cost: ${sum_cost:10.2f}')
+            logger.info(f'Archived size:      {sum_ark:12.3f} GB (matching {args.project}, before {before}, after {after})')
+            logger.info(f'Live size:          {sum_live:12.3f} GB (matching {args.project}, before {before}, after {after})')
+            logger.info(f'Total storage cost: ${sum_cost:10.2f}    (matching {args.project}, before {before}, after {after})')
             if args.compute:
                 sum_compute = df.data['computeCost'].sum()
-                print(f'Total compute cost: ${sum_compute:10.2f}')
+                logger.info(f'Total compute cost: ${sum_compute:10.2f}')
         
             # run archival
             if args.archive:
@@ -310,8 +374,9 @@ def main(args):
                         live_files = list(filter(lambda x: x['describe']['archivalState'] == 'live', safe_files))
                         # show archival state
                         if args.dryrun:
-                            print(f'\nWould archive {len(live_files)} in {project["describe"].get("name")}')
+                            logger.debug(f'Would archive {len(live_files)} objects in {project["describe"].get("name")}')
                         elif live_files:
+                            logger.info(f'Archiving {len(live_files)} objects in {project["describe"].get("name")}')
                             # archive files in chunks (max 1000 per API call)
                             files = list(map(lambda x: x['id'], live_files))
                             chunks = [files[i:i + 1000] for i in range(0, len(files), 1000)]
@@ -322,10 +387,11 @@ def main(args):
                     # rename project
                     if args.rename:
                         new_project_name = re.sub(args.project, args.rename, project['describe']['name'])
-                        if not args.dryrun:
-                            dx.update_project(project['id'], name=new_project_name)
+                        if args.dryrun:
+                            logger.debug(f'Would rename project {project["describe"]["name"]} to {new_project_name}')
                         else:
-                            print(f'Would rename project {project["describe"]["name"]} to {new_project_name}')
+                            logger.info(f'Renaming {project["describe"]["name"]} to {new_project_name}')
+                            dx.update_project(project['id'], name=new_project_name)
                 
 
 if __name__ == "__main__":
@@ -334,6 +400,7 @@ if __name__ == "__main__":
     parser_global = parser.add_argument_group('Global Options')
     parser_global.add_argument("--token", help="DNAnexus access token", default=DX_API_TOKEN)
     parser_global.add_argument("--output", help="Output file (defaults to STDOUT)", default=None)
+    parser_global.add_argument("--syslog", help="Log actions to SYSLOG (if available)", action='store_true')
 
     parser_main = parser.add_argument_group('Main Options')
     parser_commands = parser_main.add_mutually_exclusive_group(required=True)
@@ -353,20 +420,18 @@ if __name__ == "__main__":
     parser_find.add_argument("--notin", help="Exclude file if in project (regex)", type=str, default=None)
     parser_find.add_argument("--follow", help="Also return the matching files in all projects", action='store_true')
     
-    parser_archiving = parser_find.add_argument_group('Archiving')
+    parser_archiving = parser.add_argument_group('Archiving')
+    parser_archiving.add_argument("--unarchive", action="store_true", help="Unarchives projects/files")
     parser_archiving.add_argument("--archive", action="store_true", help="Archives projects/files")
     parser_archiving.add_argument("--all", action="store_true", help="Forces archival of all copies of a given file (used with --archive)")
-    parser_archiving.add_argument("--rename", help="Rename projects matched pattern (e.g. 802_). Only effective when archviing projects!", type=str, default=None)
+    parser_archiving.add_argument("--rename", help="Rename projects matched regex (e.g. 802_). Only effective when archiving projects!", type=str, default=None)
     parser_archiving.add_argument("--dryrun", action="store_true", help="Dry-run (used with --archive)")
     
-    parser_unarchiving = parser_find.add_argument_group('Unarchiving')
-    parser_unarchiving.add_argument("--unarchive", action="store_true", help="Unarchives projects/files")
-
-    parser_updating = parser_find.add_argument_group('Updating')
+    parser_updating = parser.add_argument_group('Updating')
     parser_updating.add_argument("--tag", help="Add file tags", metavar="TAG1,TAG2,...", type=str)
     parser_updating.add_argument("--untag", help="Remove file tags", metavar="TAG1,TAG2,...", type=str)
     
-    parser_audit = parser_find.add_argument_group('Audit')
+    parser_audit = parser.add_argument_group('Audit')
     parser_audit.add_argument("--compute", metavar='FILE', help="Compute cost audit")
 
 
