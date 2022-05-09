@@ -14,6 +14,7 @@ from logging.config import dictConfig
 from app.dx import *
 from tqdm.auto import tqdm
 from dotenv import load_dotenv
+from slack_logger import SlackHandler, SlackFormatter
 
 WORKSTATION_COLUMNS = ['id', 'region', 'billTo', 'state', 'launchedBy', 'instanceType', 'totalPrice']
 
@@ -60,16 +61,18 @@ class DataFile(object):
         print(self.data)
 
 
-def setup_logger(use_syslog):
+def setup_logger(use_syslog, slack_webhook_url):
     '''
     Sets up logger and optionally logs to SYSLOG (Linux only)
     
     input:
         use_syslog: bool
-    
+        slack_webhook_url: URL
+
     output:
         logger: logging.Logger
     '''
+    # default stream handler
     logging_config = {
         'version': 1,
         'formatters': {
@@ -79,10 +82,19 @@ def setup_logger(use_syslog):
                 'datefmt': r'%Y-%m-%d %H:%M:%S'
             }
         },
-        'handlers': { },
-        'root': { 'handlers': [], 'level': logging.DEBUG }
+        'handlers': {
+            'stream_handler': {
+                'class': 'logging.StreamHandler',
+                'formatter': 'default',
+                'level': logging.DEBUG,
+            }
+        },
+        'root': {
+            'handlers': ['stream_handler'],
+            'level': logging.DEBUG
+        }
     }
-    # add handler if available (LINUX only)
+    # add syslog handler
     SYSLOG_PATH = '/dev/log'
     if use_syslog and os.path.exists(SYSLOG_PATH):
         logging_config['handlers']['syslog_handler'] = {
@@ -92,17 +104,16 @@ def setup_logger(use_syslog):
             'address': SYSLOG_PATH
         }
         logging_config['root']['handlers'].append('syslog_handler')
-    else:
-        logging_config['handlers']['stream_handler'] = {
-            'class': 'logging.StreamHandler',
-            'formatter': 'default',
-            'level': logging.DEBUG
-        }
-        logging_config['root']['handlers'].append('stream_handler')
-    # setup and return logger
     dictConfig(logging_config)
-    return logging.getLogger()
-
+    logger = logging.getLogger()
+    # slack handler
+    if slack_webhook_url:
+        sh = SlackHandler(username='dxarc', icon_emoji=':robot_face:', url=slack_webhook_url)
+        sh.setLevel(logging.WARN)
+        sh.setFormatter(SlackFormatter())
+        logger.addHandler(sh)
+    # return logger
+    return logger
 
 def main(args):
     """
@@ -110,7 +121,7 @@ def main(args):
     """
 
     # setup logger
-    logger = setup_logger(args.syslog)
+    logger = setup_logger(args.syslog, args.slack)
 
     # init progress reporter for pandas operations
     tqdm.pandas()
@@ -146,7 +157,24 @@ def main(args):
     if args.orgs:
         df = DataFile(args.output, ORG_COLUMNS)
         orgs = list(dxpy.bindings.search.find_orgs({'level': 'MEMBER', 'describe': True}))
+        # setup minimal funds warning
+        if args.minfunds:
+            try:
+                minfunds, minfunds_org = args.minfunds.split(':')
+                minfunds = float(minfunds)
+            except ValueError:
+                minfunds, minfunds_org = args.minfunds, None
+            try:
+                minfunds = float(minfunds)
+            except:
+                logger.error(f'Invalid minimum funds threshold: {args.minfunds}')
+                sys.exit(1)
+        else:
+            minfunds, minfunds_org = None, None
         for org in orgs:
+            if minfunds and float(org['describe']['estSpendingLimitLeft']) < minfunds:
+                if not minfunds_org or minfunds_org == org['describe']['id']:
+                    logger.warning(f'Available funds low for {org["describe"]["name"]} ({org["describe"]["estSpendingLimitLeft"]})')
             data = {}
             for col in ORG_COLUMNS:
                 data[col] = org['describe'][col]
@@ -238,7 +266,7 @@ def main(args):
                         logger.debug(f'Would archive {file["id"]} in {file["project"]}')
                     else:
                         if not dx.archive(file['project'], file['id'], args.all):
-                            logger.warn(f'Failed to archive {file["id"]} in {file["project"]}. Check permissions.')
+                            logger.warning(f'Failed to archive {file["id"]} in {file["project"]}. Check permissions.')
                         else:
                             logger.info(f'Archived {file["id"]} in {file["project"]}')
             elif args.unarchive:
@@ -249,7 +277,7 @@ def main(args):
                         logger.debug(f'Would unarchive {file["id"]} in {file["project"]}')
                     else:
                         if not dx.unarchive(file['project'], file['id']):
-                            logger.warn(f'Failed to unarchive {file["id"]} in {file["project"]}. Check permissions.')
+                            logger.warning(f'Failed to unarchive {file["id"]} in {file["project"]}. Check permissions.')
                         else:
                             logger.info(f'Unarchived {file["id"]} in {file["project"]}')
 
@@ -376,7 +404,7 @@ def main(args):
                         if args.dryrun:
                             logger.debug(f'Would archive {len(live_files)} objects in {project["describe"].get("name")}')
                         elif live_files:
-                            logger.info(f'Archiving {len(live_files)} objects in {project["describe"].get("name")}')
+                            logger.warning(f'Archiving {len(live_files)} objects in {project["describe"].get("name")}')
                             # archive files in chunks (max 1000 per API call)
                             files = list(map(lambda x: x['id'], live_files))
                             chunks = [files[i:i + 1000] for i in range(0, len(files), 1000)]
@@ -390,7 +418,7 @@ def main(args):
                         if args.dryrun:
                             logger.debug(f'Would rename project {project["describe"]["name"]} to {new_project_name}')
                         else:
-                            logger.info(f'Renaming {project["describe"]["name"]} to {new_project_name}')
+                            logger.warning(f'Renaming {project["describe"]["name"]} to {new_project_name}')
                             dx.update_project(project['id'], name=new_project_name)
                 
 
@@ -401,6 +429,7 @@ if __name__ == "__main__":
     parser_global.add_argument("--token", help="DNAnexus access token", default=DX_API_TOKEN)
     parser_global.add_argument("--output", help="Output file (defaults to STDOUT)", default=None)
     parser_global.add_argument("--syslog", help="Log actions to SYSLOG (if available)", action='store_true')
+    parser_global.add_argument("--slack", help="Log actions to Slack", metavar="WEBHOOK_URL")
 
     parser_main = parser.add_argument_group('Main Options')
     parser_commands = parser_main.add_mutually_exclusive_group(required=True)
@@ -433,6 +462,7 @@ if __name__ == "__main__":
     
     parser_audit = parser.add_argument_group('Audit')
     parser_audit.add_argument("--compute", metavar='FILE', help="Compute cost audit")
+    parser_audit.add_argument("--minfunds", metavar='AMOUNT[:ORG]', help="Warns if funds are below level (optional ORG)")
 
 
     # outputs
