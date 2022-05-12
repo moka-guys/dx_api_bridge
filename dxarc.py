@@ -115,13 +115,11 @@ def setup_logger(use_syslog, slack_webhook_url):
     # return logger
     return logger
 
-def main(args):
+
+def main(args,logger):
     """
     Main function
     """
-
-    # setup logger
-    logger = setup_logger(args.syslog, args.slack)
 
     # init progress reporter for pandas operations
     tqdm.pandas()
@@ -171,9 +169,10 @@ def main(args):
                 sys.exit(1)
         else:
             minfunds, minfunds_org = None, None
+        # collecting funding info by org
         for org in orgs:
             if minfunds and float(org['describe']['estSpendingLimitLeft']) < minfunds:
-                if not minfunds_org or minfunds_org == org['describe']['id']:
+                if not minfunds_org or re.match(f'^(org-)?{minfunds_org}$',org['id']):
                     logger.warning(f'Available funds low for {org["describe"]["name"]} ({org["describe"]["estSpendingLimitLeft"]})')
             data = {}
             for col in ORG_COLUMNS:
@@ -474,4 +473,12 @@ if __name__ == "__main__":
     if not args.token:
         parser.error("Supply access token or set the DX_API_TOKEN environment variable.")
 
-    main(args)
+    # setup logger
+    logger = setup_logger(args.syslog, args.slack)
+
+    try:
+        main(args, logger)
+    except Exception as e:
+        logger.critical('DXARC failed with',e)
+    else:
+        logger.info('DXARC completed successfully')
