@@ -202,7 +202,8 @@ def main(args,logger):
                 visibility=args.visibility, tags=tags, classname=args.type, \
                 modified_after=after, modified_before=before, limit=args.limit))
             logger.info(f'Found {len(objects)} objects matching {args.object}')
-            
+            if not len(objects):
+                sys.exit(1)
             # follow objects into other projects (finds other isntances of found files) e.g. allows to find files ina project and then tag/archive etc all copies of it
             if args.follow:
                 followed_objects = []
@@ -310,6 +311,8 @@ def main(args,logger):
             # get projects
             projects = dx.find_projects(f'{args.project}', mode='regexp', created_after=after, created_before=before)
             logger.info(f'Found {len(projects)} projects (matching {args.project}, before {before}, after {after})')
+            if not len(projects):
+                sys.exit(1)
 
             # audit
             for project in tqdm(projects):
