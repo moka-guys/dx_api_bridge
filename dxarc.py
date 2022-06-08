@@ -10,19 +10,24 @@ import pandas as pd
 from dxpy.exceptions import InvalidAuthentication
 import dxpy
 import logging
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from logging.config import dictConfig
 from app.dx import *
 from tqdm.auto import tqdm
 from dotenv import load_dotenv
 from slack_logger import SlackHandler, SlackFormatter
 
+# colums to show in workstation report
 WORKSTATION_COLUMNS = ['id', 'region', 'billTo', 'state', 'launchedBy', 'instanceType', 'totalPrice']
-
+# columns summarised when emailing report
+SUMMARY_COLUMNS = ['dataUsage', 'archivedDataUsage', 'storageCost']
+AUDIT_COLUMNS = ['project-name', 'created', 'modified', 'dataUsage', 'archivedDataUsage', 'storageCost', 'billedTo' ]
+# dataFrame columns
 COST_COLUMNS = ['project-name', 'project-id', 'created', 'modified', 'dataUsage', 'archivedDataUsage', 'storageCost', 'billedTo', 'computeCost', 'estComputeCostPerSample']
 COMPUTE_COLUMNS = ['job','launchedBy','workflowName','region','executableName','billTo','state','instanceType','totalPrice']
 ORG_COLUMNS = ['id','estSpendingLimitLeft', 'computeCharges', 'storageCharges', 'dataEgressCharges']
-DEPENDENCY_TAG = 'dependency'
-
 
 # load environment
 load_dotenv()
@@ -38,10 +43,44 @@ def as_date(epoch):
     '''
     return time.strftime('%Y-%m-%dT d %H:%M:%S', time.localtime(epoch/1000))
 
+def send_email(email_server, email_from, email_to, email_subject, email_text, email_html):
+    '''
+    Sends email
+    
+    input:
+        email_server: SMTP server (assumes port 25)
+        email_from: str
+        email_to: str
+        email_subject: str
+        email_body: str
+    '''
+    if ":" in email_server:
+        email_host, email_port = email_server.split(':')
+    else:
+        email_host = email_server
+        email_port = 25
+    # create message
+    msg = MIMEMultipart('alternative')
+    msg['From'] = email_from
+    msg['To'] = email_to
+    msg['Subject'] = email_subject
+    # Record the MIME types of both parts - text/plain and text/html.
+    part1 = MIMEText(email_text, 'plain')
+    part2 = MIMEText(email_html, 'html')
+    # Attach parts into message container.
+    msg.attach(part1)
+    msg.attach(part2)  # last part is preferred (html)
+    # Send the message via local SMTP server.
+    mail = smtplib.SMTP(email_host, email_port)
+    mail.sendmail(email_from, email_to, msg.as_string())
+    mail.quit()
+
+
 # Pandas DataFrame bases csv output (stdout or file)
 class DataFile(object):
-    def __init__(self, file, columns=None):
+    def __init__(self, file, email=None, columns=None):
         self.file = file
+        self.email = email
         self.columns = columns
         self.data = pd.DataFrame(columns=columns)
         if columns:
@@ -56,9 +95,47 @@ class DataFile(object):
         self.data = pd.concat([self.data, pd.DataFrame(dict, index=[0])], ignore_index=True)
 
     def commit(self):
+        # write to file and return
         if self.file:
-            return self.data.to_csv(self.file, sep="\t", index=False)
-        print(self.data)
+            self.data.to_csv(self.file, sep="\t", index=False)
+        # formatted email
+        if self.email:
+            # validate email config (crude)
+            try:
+                email_server, email_from, email_to, email_subject = self.email.split(',')
+                assert re.match(r'^[^@]+@[^@]+\.[^@]+$', email_to)
+                assert re.match(r'^[^@]+@[^@]+\.[^@]+$', email_from)
+            except Exception as e:
+                logging.error(f'Invalid email config: {self.email}')
+                return
+            # summarize data
+            totals = self.data[SUMMARY_COLUMNS].transpose().sum(axis=1)
+            # create email body
+            email_text = """\
+            DX Audit - %s
+            
+            Totals:
+            %s
+            
+            Projects
+            %s
+            """ % (email_subject, totals.to_string(), self.data[AUDIT_COLUMNS].to_string())
+            email_html = """\
+            <html>
+                <head></head>
+                <body>
+                    <h2>DX Audit - %s</h2>
+                    <h5>Totals</h5>
+                    %s
+                    <h5>Projects</h5>
+                    %s
+                </body>
+            </html>
+            """ % (email_subject, pd.DataFrame([totals]).to_html(), self.data[AUDIT_COLUMNS].to_html())
+            # send email
+            send_email(email_server, email_from, email_to, email_subject, email_text, email_html)
+        # print to screen
+        print(self.data.to_string())
 
 
 def setup_logger(use_syslog, slack_webhook_url):
@@ -182,7 +259,7 @@ def main(args,logger):
         sys.exit(0)
 
     # datafile (output)
-    df = DataFile(args.output)
+    df = DataFile(args.output, email=args.email)
 
     # find data objects (files)
     if args.find:
@@ -433,6 +510,7 @@ if __name__ == "__main__":
     parser_global.add_argument("--output", help="Output file (defaults to STDOUT)", default=None)
     parser_global.add_argument("--syslog", help="Log actions to SYSLOG (if available)", action='store_true')
     parser_global.add_argument("--slack", help="Log actions to Slack", metavar="WEBHOOK_URL")
+    parser_global.add_argument("--email", help="Send audit as email (via unencrypted relay)", metavar="HOST:PORT,FROM,TO,SUBJECT")
 
     parser_main = parser.add_argument_group('Main Options')
     parser_commands = parser_main.add_mutually_exclusive_group(required=True)
