@@ -138,7 +138,7 @@ def main(args,logger):
     
     # workstations
     if args.workstations:
-        df = DataFile(args.output, WORKSTATION_COLUMNS)
+        df = DataFile(args.output, columns=WORKSTATION_COLUMNS)
         workstations = dx.workstations(after=after, before=before)
         # get workstations (workstation app executions)
         logger.info(f'Found {len(workstations)} cloud workstations')
@@ -153,7 +153,7 @@ def main(args,logger):
 
     # show orgs
     if args.orgs:
-        df = DataFile(args.output, ORG_COLUMNS)
+        df = DataFile(args.output, columns=ORG_COLUMNS)
         orgs = list(dxpy.bindings.search.find_orgs({'level': 'MEMBER', 'describe': True}))
         # setup minimal funds warning
         if args.minfunds:
@@ -328,7 +328,7 @@ def main(args,logger):
                 }
                 # compute cost audit for projects
                 if args.compute:
-                    cdf = DataFile(args.compute, COMPUTE_COLUMNS)
+                    cdf = DataFile(args.compute, columns=COMPUTE_COLUMNS)
                     # per project stats
                     analyses = list(dxpy.bindings.find_executions(project=project['id'], classname='analysis', describe=True))
                     workflow_counter = Counter()
@@ -386,6 +386,7 @@ def main(args,logger):
                 print(f'Archiving {len(projects)} projects...', file=sys.stderr)
                 # get file ids from projects
                 exclude_files = dx.project_file_ids(args.notin)
+                logger.info(f'Added {len(exclude_files)} object-ids to the exclusion list')
                 # iterate over projects
                 projects_iterator = tqdm(projects)
                 for project in projects_iterator:

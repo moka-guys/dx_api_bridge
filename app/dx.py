@@ -323,9 +323,11 @@ class Dx(object):
             list of file ids
         '''
         # find project-ids whose membership is reason for exclusion from archival
-        exclude_in_project = list(map(lambda x:  x['id'], self.find_projects(project_regex, 'regexp'))) if project_regex else []
+        exclude_in_project = list(map(lambda x:  x['id'], self.find_projects(project_regex, 'regexp'))) \
+            if project_regex else []
         # find all file ids in those projects (faster than querying the projects for each archival candidate)
-        return list(set([ file_obj['id'] for p in exclude_in_project for file_obj in self.find_files('.*', 'regexp', project=p)]))
+        return list(set([ file_obj['id'] for p in exclude_in_project for file_obj in \
+            self.find_files('.*', 'regexp', project=p, visibility='either')]))
 
 
 if __name__=="__main__":
