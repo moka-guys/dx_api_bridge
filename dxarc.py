@@ -54,6 +54,9 @@ def send_email(email_server, email_from, email_to, email_subject, email_text, em
         email_subject: str
         email_body: str
     '''
+    # parse url
+    if email_server.startswith('smtp://'):
+        email_server = email_server[7:]
     if ":" in email_server:
         email_host, email_port = email_server.split(':')
     else:
@@ -136,7 +139,7 @@ class DataFile(object):
             try:
                 send_email(email_server, email_from, email_to, email_subject, email_text, email_html)
             except Exception as e:
-                logger.warning('Could not send audit via email')
+                logger.warning(f'Could not send audit via email ({str(e)})')
         # print to screen
         print(self.data.to_string())
 
@@ -456,7 +459,7 @@ def main(args,logger):
             # print formatted numeric outputs
             logger.info(f'Archived size:      {sum_ark:12.3f} GB (matching {args.project}, before {before}, after {after})')
             logger.info(f'Live size:          {sum_live:12.3f} GB (matching {args.project}, before {before}, after {after})')
-            logger.info(f'Total storage cost: ${sum_cost:10.2f}    (matching {args.project}, before {before}, after {after})')
+            logger.info(f'Total storage cost: ${sum_cost:10.2f}     (matching {args.project}, before {before}, after {after})')
             if args.compute:
                 sum_compute = df.data['computeCost'].sum()
                 logger.info(f'Total compute cost: ${sum_compute:10.2f}')
