@@ -46,7 +46,7 @@ def as_date(epoch):
 def send_email(email_server, email_from, email_to, email_subject, email_text, email_html):
     '''
     Sends email
-    
+
     input:
         email_server: SMTP server (assumes port 25)
         email_from: str
@@ -87,7 +87,7 @@ class DataFile(object):
             for COL in columns:
                 if COL not in self.data:
                     self.data[COL] = ''
-    
+
     def reload(self):
         self.data = pd.read_csv(self.file)
 
@@ -106,17 +106,17 @@ class DataFile(object):
                 assert re.match(r'^[^@]+@[^@]+\.[^@]+$', email_to)
                 assert re.match(r'^[^@]+@[^@]+\.[^@]+$', email_from)
             except Exception as e:
-                logging.error(f'Invalid email config: {self.email}')
+                logger.error(f'Invalid email config: {self.email}')
                 return
             # summarize data
             totals = self.data[SUMMARY_COLUMNS].transpose().sum(axis=1)
             # create email body
             email_text = """\
             DX Audit - %s
-            
+
             Totals:
             %s
-            
+
             Projects
             %s
             """ % (email_subject, totals.to_string(), self.data[AUDIT_COLUMNS].to_string())
@@ -133,7 +133,10 @@ class DataFile(object):
             </html>
             """ % (email_subject, pd.DataFrame([totals]).to_html(), self.data[AUDIT_COLUMNS].to_html())
             # send email
-            send_email(email_server, email_from, email_to, email_subject, email_text, email_html)
+            try:
+                send_email(email_server, email_from, email_to, email_subject, email_text, email_html)
+            except Exception as e:
+                logger.warning('Could not send audit via email')
         # print to screen
         print(self.data.to_string())
 
@@ -141,7 +144,7 @@ class DataFile(object):
 def setup_logger(use_syslog, slack_webhook_url):
     '''
     Sets up logger and optionally logs to SYSLOG (Linux only)
-    
+
     input:
         use_syslog: bool
         slack_webhook_url: URL
@@ -212,7 +215,7 @@ def main(args,logger):
     after = f'-{args.after}' if args.after else None
     before = f'-{args.before}' if args.before else None
     tags = args.tags.split(',') if args.tags else None
-    
+
     # workstations
     if args.workstations:
         df = DataFile(args.output, columns=WORKSTATION_COLUMNS)
@@ -500,11 +503,11 @@ def main(args,logger):
                         else:
                             logger.warning(f'Renaming {project["describe"]["name"]} to {new_project_name}')
                             dx.update_project(project['id'], name=new_project_name)
-                
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Project Archiving Tool")
-    
+
     parser_global = parser.add_argument_group('Global Options')
     parser_global.add_argument("--token", help="DNAnexus access token", default=DX_API_TOKEN)
     parser_global.add_argument("--output", help="Output file (defaults to STDOUT)", default=None)
@@ -517,7 +520,7 @@ if __name__ == "__main__":
     parser_commands.add_argument('-w', dest='workstations', action='store_true', help='Get Workstation info')
     parser_commands.add_argument('-r', dest='orgs', action='store_true', help="Get Organisation info")
     parser_commands.add_argument('-f', dest='find', action='store_true', help="Find projects/objects")
-    
+
     parser_find = parser.add_argument_group('Find options')
     parser_find.add_argument("--project", dest='project', help="Project name pattern (e.g. ^002_)", type=str, default=None) 
     parser_find.add_argument("--object", dest='object', help="Object name regex (e.g. ^.*\.bam$)", type=str, default=None)
@@ -529,18 +532,18 @@ if __name__ == "__main__":
     parser_find.add_argument("--tags", help="Require at least one tag (comma-delimited)", type=str)
     parser_find.add_argument("--notin", help="Exclude file if in project (regex)", type=str, default=None)
     parser_find.add_argument("--follow", help="Also return the matching files in all projects", action='store_true')
-    
+
     parser_archiving = parser.add_argument_group('Archiving')
     parser_archiving.add_argument("--unarchive", action="store_true", help="Unarchives projects/files")
     parser_archiving.add_argument("--archive", action="store_true", help="Archives projects/files")
     parser_archiving.add_argument("--all", action="store_true", help="Forces archival of all copies of a given file (used with --archive)")
     parser_archiving.add_argument("--rename", help="Rename projects matched regex (e.g. 802_). Only effective when archiving projects!", type=str, default=None)
     parser_archiving.add_argument("--dryrun", action="store_true", help="Dry-run (used with --archive)")
-    
+
     parser_updating = parser.add_argument_group('Updating')
     parser_updating.add_argument("--tag", help="Add file tags", metavar="TAG1,TAG2,...", type=str)
     parser_updating.add_argument("--untag", help="Remove file tags", metavar="TAG1,TAG2,...", type=str)
-    
+
     parser_audit = parser.add_argument_group('Audit')
     parser_audit.add_argument("--compute", metavar='FILE', help="Compute cost audit")
     parser_audit.add_argument("--minfunds", metavar='AMOUNT[:ORG]', help="Warns if funds are below level (optional ORG)")
