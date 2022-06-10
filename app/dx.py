@@ -312,10 +312,10 @@ class Dx(object):
             workstations += list(dxpy.bindings.search.find_executions(executable=app['id'], describe=True, *args, **kwargs))
         return workstations
 
-    def project_file_ids(self, project_regex):
+    def project_file_ids(self, project_regex, *args, **kwargs):
         '''
         Returns a deduplicated list of file ids for all files in one or multiple projects (matched by regex name)
-        
+
         Args:
             project_regex (str): regex to match project name
 
@@ -327,7 +327,7 @@ class Dx(object):
             if project_regex else []
         # find all file ids in those projects (faster than querying the projects for each archival candidate)
         return list(set([ file_obj['id'] for p in exclude_in_project for file_obj in \
-            self.find_files('.*', 'regexp', project=p, visibility='either')]))
+            self.find_files('.*', 'regexp', project=p, *args, **kwargs)]))
 
 
 if __name__=="__main__":

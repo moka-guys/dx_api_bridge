@@ -297,7 +297,7 @@ def main(args,logger):
 
             # remove excluded objects
             if args.notin:
-                exclude_files = dx.project_file_ids(args.notin)
+                exclude_files = dx.project_file_ids(args.notin, visibility=args.visibility)
                 not_excluded_objects = list(filter(lambda x: x['id'] not in exclude_files, objects))
                 logger.info(f'Removed {len(objects) - len(not_excluded_objects)} objects as they are contained in {args.notin}')
                 objects = not_excluded_objects
@@ -444,7 +444,7 @@ def main(args,logger):
             df.commit()
             if args.compute:
                 cdf.commit()
-        
+
             # report total storage cost
             sum_cost = df.data['storageCost'].sum()
             sum_data = df.data['dataUsage'].sum()
@@ -457,12 +457,12 @@ def main(args,logger):
             if args.compute:
                 sum_compute = df.data['computeCost'].sum()
                 logger.info(f'Total compute cost: ${sum_compute:10.2f}')
-        
+
             # run archival
             if args.archive:
                 print(f'Archiving {len(projects)} projects...', file=sys.stderr)
                 # get file ids from projects
-                exclude_files = dx.project_file_ids(args.notin)
+                exclude_files = dx.project_file_ids(args.notin, visibility=args.visibility)
                 logger.info(f'Added {len(exclude_files)} object-ids to the exclusion list')
                 # iterate over projects
                 projects_iterator = tqdm(projects)
