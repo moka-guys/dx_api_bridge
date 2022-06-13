@@ -10,19 +10,24 @@ import pandas as pd
 from dxpy.exceptions import InvalidAuthentication
 import dxpy
 import logging
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from logging.config import dictConfig
 from app.dx import *
 from tqdm.auto import tqdm
 from dotenv import load_dotenv
 from slack_logger import SlackHandler, SlackFormatter
 
+# colums to show in workstation report
 WORKSTATION_COLUMNS = ['id', 'region', 'billTo', 'state', 'launchedBy', 'instanceType', 'totalPrice']
-
+# columns summarised when emailing report
+SUMMARY_COLUMNS = ['dataUsage', 'archivedDataUsage', 'storageCost']
+AUDIT_COLUMNS = ['project-name', 'created', 'modified', 'dataUsage', 'archivedDataUsage', 'storageCost', 'billedTo' ]
+# dataFrame columns
 COST_COLUMNS = ['project-name', 'project-id', 'created', 'modified', 'dataUsage', 'archivedDataUsage', 'storageCost', 'billedTo', 'computeCost', 'estComputeCostPerSample']
 COMPUTE_COLUMNS = ['job','launchedBy','workflowName','region','executableName','billTo','state','instanceType','totalPrice']
 ORG_COLUMNS = ['id','estSpendingLimitLeft', 'computeCharges', 'storageCharges', 'dataEgressCharges']
-DEPENDENCY_TAG = 'dependency'
-
 
 # load environment
 load_dotenv()
@@ -38,17 +43,54 @@ def as_date(epoch):
     '''
     return time.strftime('%Y-%m-%dT d %H:%M:%S', time.localtime(epoch/1000))
 
+def send_email(email_server, email_from, email_to, email_subject, email_text, email_html):
+    '''
+    Sends email
+
+    input:
+        email_server: SMTP server (assumes port 25)
+        email_from: str
+        email_to: str
+        email_subject: str
+        email_body: str
+    '''
+    # parse url
+    if email_server.startswith('smtp://'):
+        email_server = email_server[7:]
+    if ":" in email_server:
+        email_host, email_port = email_server.split(':')
+    else:
+        email_host = email_server
+        email_port = 25
+    # create message
+    msg = MIMEMultipart('alternative')
+    msg['From'] = email_from
+    msg['To'] = email_to
+    msg['Subject'] = email_subject
+    # Record the MIME types of both parts - text/plain and text/html.
+    part1 = MIMEText(email_text, 'plain')
+    part2 = MIMEText(email_html, 'html')
+    # Attach parts into message container.
+    msg.attach(part1)
+    msg.attach(part2)  # last part is preferred (html)
+    # Send the message via local SMTP server.
+    mail = smtplib.SMTP(email_host, email_port)
+    mail.sendmail(email_from, email_to, msg.as_string())
+    mail.quit()
+
+
 # Pandas DataFrame bases csv output (stdout or file)
 class DataFile(object):
-    def __init__(self, file, columns=None):
+    def __init__(self, file, email=None, columns=None):
         self.file = file
+        self.email = email
         self.columns = columns
         self.data = pd.DataFrame(columns=columns)
         if columns:
             for COL in columns:
                 if COL not in self.data:
                     self.data[COL] = ''
-    
+
     def reload(self):
         self.data = pd.read_csv(self.file)
 
@@ -56,15 +98,56 @@ class DataFile(object):
         self.data = pd.concat([self.data, pd.DataFrame(dict, index=[0])], ignore_index=True)
 
     def commit(self):
+        # write to file and return
         if self.file:
-            return self.data.to_csv(self.file, sep="\t", index=False)
-        print(self.data)
+            self.data.to_csv(self.file, sep="\t", index=False)
+        # formatted email
+        if self.email:
+            # validate email config (crude)
+            try:
+                email_server, email_from, email_to, email_subject = self.email.split(',')
+                assert re.match(r'^[^@]+@[^@]+\.[^@]+$', email_to)
+                assert re.match(r'^[^@]+@[^@]+\.[^@]+$', email_from)
+            except Exception as e:
+                logger.error(f'Invalid email config: {self.email}')
+                return
+            # summarize data
+            totals = self.data[SUMMARY_COLUMNS].transpose().sum(axis=1)
+            # create email body
+            email_text = """\
+            DX Audit - %s
+
+            Totals:
+            %s
+
+            Projects
+            %s
+            """ % (email_subject, totals.to_string(), self.data[AUDIT_COLUMNS].to_string())
+            email_html = """\
+            <html>
+                <head></head>
+                <body>
+                    <h2>DX Audit - %s</h2>
+                    <h5>Totals</h5>
+                    %s
+                    <h5>Projects</h5>
+                    %s
+                </body>
+            </html>
+            """ % (email_subject, pd.DataFrame([totals]).to_html(), self.data[AUDIT_COLUMNS].to_html())
+            # send email
+            try:
+                send_email(email_server, email_from, email_to, email_subject, email_text, email_html)
+            except Exception as e:
+                logger.warning(f'Could not send audit via email ({str(e)})')
+        # print to screen
+        print(self.data.to_string())
 
 
 def setup_logger(use_syslog, slack_webhook_url):
     '''
     Sets up logger and optionally logs to SYSLOG (Linux only)
-    
+
     input:
         use_syslog: bool
         slack_webhook_url: URL
@@ -135,10 +218,10 @@ def main(args,logger):
     after = f'-{args.after}' if args.after else None
     before = f'-{args.before}' if args.before else None
     tags = args.tags.split(',') if args.tags else None
-    
+
     # workstations
     if args.workstations:
-        df = DataFile(args.output, WORKSTATION_COLUMNS)
+        df = DataFile(args.output, columns=WORKSTATION_COLUMNS)
         workstations = dx.workstations(after=after, before=before)
         # get workstations (workstation app executions)
         logger.info(f'Found {len(workstations)} cloud workstations')
@@ -153,7 +236,7 @@ def main(args,logger):
 
     # show orgs
     if args.orgs:
-        df = DataFile(args.output, ORG_COLUMNS)
+        df = DataFile(args.output, columns=ORG_COLUMNS)
         orgs = list(dxpy.bindings.search.find_orgs({'level': 'MEMBER', 'describe': True}))
         # setup minimal funds warning
         if args.minfunds:
@@ -182,7 +265,7 @@ def main(args,logger):
         sys.exit(0)
 
     # datafile (output)
-    df = DataFile(args.output)
+    df = DataFile(args.output, email=args.email)
 
     # find data objects (files)
     if args.find:
@@ -202,7 +285,8 @@ def main(args,logger):
                 visibility=args.visibility, tags=tags, classname=args.type, \
                 modified_after=after, modified_before=before, limit=args.limit))
             logger.info(f'Found {len(objects)} objects matching {args.object}')
-            
+            if not len(objects):
+                sys.exit(1)
             # follow objects into other projects (finds other isntances of found files) e.g. allows to find files ina project and then tag/archive etc all copies of it
             if args.follow:
                 followed_objects = []
@@ -219,7 +303,7 @@ def main(args,logger):
 
             # remove excluded objects
             if args.notin:
-                exclude_files = dx.project_file_ids(args.notin)
+                exclude_files = dx.project_file_ids(args.notin, visibility=args.visibility)
                 not_excluded_objects = list(filter(lambda x: x['id'] not in exclude_files, objects))
                 logger.info(f'Removed {len(objects) - len(not_excluded_objects)} objects as they are contained in {args.notin}')
                 objects = not_excluded_objects
@@ -310,6 +394,8 @@ def main(args,logger):
             # get projects
             projects = dx.find_projects(f'{args.project}', mode='regexp', created_after=after, created_before=before)
             logger.info(f'Found {len(projects)} projects (matching {args.project}, before {before}, after {after})')
+            if not len(projects):
+                sys.exit(1)
 
             # audit
             for project in tqdm(projects):
@@ -325,7 +411,7 @@ def main(args,logger):
                 }
                 # compute cost audit for projects
                 if args.compute:
-                    cdf = DataFile(args.compute, COMPUTE_COLUMNS)
+                    cdf = DataFile(args.compute, columns=COMPUTE_COLUMNS)
                     # per project stats
                     analyses = list(dxpy.bindings.find_executions(project=project['id'], classname='analysis', describe=True))
                     workflow_counter = Counter()
@@ -364,7 +450,7 @@ def main(args,logger):
             df.commit()
             if args.compute:
                 cdf.commit()
-        
+
             # report total storage cost
             sum_cost = df.data['storageCost'].sum()
             sum_data = df.data['dataUsage'].sum()
@@ -373,16 +459,17 @@ def main(args,logger):
             # print formatted numeric outputs
             logger.info(f'Archived size:      {sum_ark:12.3f} GB (matching {args.project}, before {before}, after {after})')
             logger.info(f'Live size:          {sum_live:12.3f} GB (matching {args.project}, before {before}, after {after})')
-            logger.info(f'Total storage cost: ${sum_cost:10.2f}    (matching {args.project}, before {before}, after {after})')
+            logger.info(f'Total storage cost: ${sum_cost:10.2f}     (matching {args.project}, before {before}, after {after})')
             if args.compute:
                 sum_compute = df.data['computeCost'].sum()
                 logger.info(f'Total compute cost: ${sum_compute:10.2f}')
-        
+
             # run archival
             if args.archive:
                 print(f'Archiving {len(projects)} projects...', file=sys.stderr)
                 # get file ids from projects
-                exclude_files = dx.project_file_ids(args.notin)
+                exclude_files = dx.project_file_ids(args.notin, visibility=args.visibility)
+                logger.info(f'Added {len(exclude_files)} object-ids to the exclusion list')
                 # iterate over projects
                 projects_iterator = tqdm(projects)
                 for project in projects_iterator:
@@ -419,23 +506,24 @@ def main(args,logger):
                         else:
                             logger.warning(f'Renaming {project["describe"]["name"]} to {new_project_name}')
                             dx.update_project(project['id'], name=new_project_name)
-                
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Project Archiving Tool")
-    
+
     parser_global = parser.add_argument_group('Global Options')
     parser_global.add_argument("--token", help="DNAnexus access token", default=DX_API_TOKEN)
     parser_global.add_argument("--output", help="Output file (defaults to STDOUT)", default=None)
     parser_global.add_argument("--syslog", help="Log actions to SYSLOG (if available)", action='store_true')
     parser_global.add_argument("--slack", help="Log actions to Slack", metavar="WEBHOOK_URL")
+    parser_global.add_argument("--email", help="Send audit as email (via unencrypted relay)", metavar="HOST:PORT,FROM,TO,SUBJECT")
 
     parser_main = parser.add_argument_group('Main Options')
     parser_commands = parser_main.add_mutually_exclusive_group(required=True)
     parser_commands.add_argument('-w', dest='workstations', action='store_true', help='Get Workstation info')
     parser_commands.add_argument('-r', dest='orgs', action='store_true', help="Get Organisation info")
     parser_commands.add_argument('-f', dest='find', action='store_true', help="Find projects/objects")
-    
+
     parser_find = parser.add_argument_group('Find options')
     parser_find.add_argument("--project", dest='project', help="Project name pattern (e.g. ^002_)", type=str, default=None) 
     parser_find.add_argument("--object", dest='object', help="Object name regex (e.g. ^.*\.bam$)", type=str, default=None)
@@ -447,18 +535,18 @@ if __name__ == "__main__":
     parser_find.add_argument("--tags", help="Require at least one tag (comma-delimited)", type=str)
     parser_find.add_argument("--notin", help="Exclude file if in project (regex)", type=str, default=None)
     parser_find.add_argument("--follow", help="Also return the matching files in all projects", action='store_true')
-    
+
     parser_archiving = parser.add_argument_group('Archiving')
     parser_archiving.add_argument("--unarchive", action="store_true", help="Unarchives projects/files")
     parser_archiving.add_argument("--archive", action="store_true", help="Archives projects/files")
     parser_archiving.add_argument("--all", action="store_true", help="Forces archival of all copies of a given file (used with --archive)")
     parser_archiving.add_argument("--rename", help="Rename projects matched regex (e.g. 802_). Only effective when archiving projects!", type=str, default=None)
     parser_archiving.add_argument("--dryrun", action="store_true", help="Dry-run (used with --archive)")
-    
+
     parser_updating = parser.add_argument_group('Updating')
     parser_updating.add_argument("--tag", help="Add file tags", metavar="TAG1,TAG2,...", type=str)
     parser_updating.add_argument("--untag", help="Remove file tags", metavar="TAG1,TAG2,...", type=str)
-    
+
     parser_audit = parser.add_argument_group('Audit')
     parser_audit.add_argument("--compute", metavar='FILE', help="Compute cost audit")
     parser_audit.add_argument("--minfunds", metavar='AMOUNT[:ORG]', help="Warns if funds are below level (optional ORG)")
