@@ -58,12 +58,3 @@ THis can be used to ensure any shared resources in 001 are live of they are also
 The output from the compute cost audit can be visualised with the included R script `compute_plot.R`.
 
 e.g. `Rscript compute_plot.R compute_audit.tsv compute_audit.pdf`
-
-
-### extract_vcf.py
-***DEVELOPMENT ONLY***
-Extract VCF calls from DNAnexus.
-
-### extract_sanger.py
-*** DEVELOPMENT ONLY ***
-Extracts Sanger results from directory containing results in excel format
