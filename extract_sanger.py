@@ -131,7 +131,7 @@ def main(args):
                     'Final result (HGVS)': confirmed_variant.hgvs(),
                     'Chr': chrom,
                     'genomics': genomics,
-                    'transcript': 'NM_138701.3',
+                    'transcript': transcript,
                     'hgvs nom': requested_variant.hgvs(),
                     'Real': result if result == 'TP' else '',
                     'False Pos': result if result == 'FP' else '',
