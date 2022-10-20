@@ -1,61 +1,102 @@
-
+from csv import excel
 import sys
 import pandas as pd
 import os
 import re
 from collections import defaultdict
 import argparse
+from tqdm import tqdm
+import win32com.client
 
-def get_variants(df):
-    cols = [ i for i, col in enumerate(df.columns) if type(col)==str and re.match(r'NGS\w+_\d+_\w+_\w{2}',col) ]
-    index_column = df.columns[min(cols)-1]
-    rows = df.index[df[index_column].isin(['SNV variant confirmation','Final Result']) == True]
-    result = df.iloc[rows,cols]
-    result.index = ['request','result']
-    return result
+from Variant import Excel, Manifest
 
-
-class Variant(object):
-    def __init__(self,cell):
-        self._zygo = re.search(r'(het|hom)', cell, re.IGNORECASE)
-        self._hgvs = re.search(r'(c\.\d+\S+)', cell)
-        self._gene = re.search(r'([A-Z][A-Z0-9]+)', cell)
-
-    def __str__(self):
-        if self._zygo and self._hgvs and self._gene:
-            return '{} {} {}'.format(self._gene.group(1), self._hgvs.group(1), self._zygo.group(1).lower())
-        else:
-            return 'X'
-
-    def check_result(self,other):
-        if str(self) and not str(other):
-            return 'FP'
-        elif str(other) and not str(self):
-            return 'FN'
-        elif not str(self) and not str(other):
-            return 'TN'
-        elif str(self) == str(other):
-            return 'TP'
-    
-    def gene(self):
-        return self._gene.group(1) if self._gene else ''
-
-    def hgvs(self):
-        return self._hgvs.group(1) if self._hgvs else ''
+def readTarget(f):
+    shell = win32com.client.Dispatch("WScript.Shell")
+    shortcut = shell.CreateShortCut(f)
+    return shortcut.TargetPath
 
 def main(args):
-    # extract data
-    dataframes = []
-    for directory, subdirectories, files in os.walk(args.directory):
-        for f in files:
-            if f.endswith('.xlsx'):
-                # read data
-                a = pd.read_excel(os.path.join(directory,f))
-                # get variants
-                df = get_variants(a)
-                dataframes.append(df)
-    data = pd.concat(dataframes,axis=1)
+    # add directories to be searched
+    excel_files = []
+    if args.directory:
+        # create new manifest
+        # assume top level a directory of symlinks
+        paths = []
+        for directory, subdirectories, files in os.walk(args.directory):
+            paths += list([ os.path.join(directory,file) if not file.endswith('.lnk') else readTarget(os.path.join(directory,file)) 
+                for file in files])
+            break
 
+        # walk through each root path extracting the excel files
+        print('Finding Excel files...')
+        for path in paths:
+            for directory, _, files in os.walk(path):
+                excel_files += list([ os.path.join(directory, file) for file in files if file.endswith(('.xls','.xlsx'))])
+                print(f'{len(excel_files)} files', end='\r')
+
+    # create manifest
+    manifest = Manifest(file=args.manifest, files=excel_files)
+    manifest.commit()
+
+    # get excel files with results
+    if args.filter:
+        print(f'Filtering files...')
+        try:
+            manifest.filter()
+        except:
+            raise
+        finally:
+            manifest.commit()
+
+
+    # parse files that are not 
+    if args.extract:
+        try:
+            manifest.extract()
+        except:
+            raise
+        finally:
+            manifest.commit()
+
+    # tidy variant fields (split multiple variants)
+    if args.tidy:
+        try:
+            manifest.tidy()
+        except:
+            raise
+        finally:
+            manifest.commit()
+
+    # validate variant fields (use supplied gene list)
+    if args.validate:
+        genes = set()
+        with open(args.validate) as fh:
+            for line in fh:
+                f = line.split()
+                genes.add(f[0])
+        # run variant validation
+        try:
+            manifest.validate(genes)
+        except:
+            raise
+        finally:
+            manifest.commit()
+    
+
+    sys.exit()
+
+    # extract data
+    variants = []
+    sample_count = 0
+    for f in tqdm(excel_files):
+        v = Variants(f)
+        if v.fields is not None:
+            variants.append(v)
+            sample_count += len(v)
+            print(f'--- {sample_count} ---')
+    print(f'=== {sample_count} ===')
+    
+    sys.exit(1)
     df = pd.DataFrame([],index=[])
     for sample in data.columns:
         if type(data[sample]['request']) == str:
@@ -81,7 +122,12 @@ def main(args):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Extracts Sanger results calls from Excel Files (without HGVS conversion)")
-    parser.add_argument("-d", "--directory", help="Search Folder containing XLSX", required=True)
+    parser.add_argument("-m", "--manifest", help="Read from MANIFEST", required=True)
+    parser.add_argument("-d", "--directory", help="Search Folder containing XLSX")
+    parser.add_argument("-f", "--filter", action='store_true', help="Filter excel files for results")
+    parser.add_argument("-x", "--extract", action='store_true', help="Extract variants from excel files")
+    parser.add_argument("-t", "--tidy", action='store_true', help="Tidy variants (split multiple)")
+    parser.add_argument("-v", "--validate", help="Validate variants (supply list of gene symbols)")
     parser.add_argument("-o", "--output", help="output file (default to STDOUT)")
 
     args = parser.parse_args()
