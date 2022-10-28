@@ -1,5 +1,6 @@
 from csv import excel
 import pandas as pd
+import numpy as np
 from pandas.api.types import is_string_dtype
 import os
 import sys
@@ -7,13 +8,51 @@ import re
 from copy import deepcopy
 from collections import defaultdict, Counter
 from itertools import zip_longest
+from functools import reduce
 from tqdm import tqdm
 import xlrd
 
+# ROWS = {
+#     'result': ['Final Result', 'Final result', 'Variant 1', 'Variant 2', 'Variant 3'],
+#     'request': ['SNV variant confirmation', 'Variant checks']
+# }
 ROWS = {
-    'result': ['Final Result', 'Final result'],
-    'request': ['SNV variant confirmation', 'Variant checks']
+    'result': r'(Final Result|Final result|Variant 1|Variant 2|Variant 3)',
+    'request': r'(SNV variant confirmation|Variant checks)'
 }
+
+
+pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', 4)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', 20)
+
+def is_variant_string(s):
+    return s is not np.nan and s and re.search(r'c\.\d',s)
+
+def parser_unique_row(data,rows,cols,row_type):
+    r = None
+    try:
+        assert len(rows)
+        r = data.iloc[rows,cols]
+        r.index = [row_type]
+    except (IndexError, ValueError) as e:
+        pass  # not unique row
+    return r
+
+def parser_block_rows(data,rows,cols,row_type):
+    r = data.iloc[rows,cols]
+    df = {}
+    for sample in r:
+        if r[sample].any():
+            v = []
+            for f in r[sample].dropna():
+                if is_variant_string(f):
+                    v.append(f)
+            # if v:
+            df[sample] = ';'.join(v)
+    # return data frame with row_type as single index
+    return pd.DataFrame(df,index=[row_type])
 
 class Manifest(object):
     '''
@@ -29,8 +68,9 @@ class Manifest(object):
         if os.path.exists(file):
             with open(file) as fh:
                 for line in fh:
-                    f = line.rstrip().split(self.SEP)
-                    self.items.append(dict(zip_longest(self.FIELDS,f,fillvalue='')))
+                    if not line.startswith('#'):
+                        f = line.rstrip().split(self.SEP)
+                        self.items.append(dict(zip_longest(self.FIELDS,f,fillvalue='')))
         if files:
             # add files to manifest
             self.items += [ dict(zip_longest(self.FIELDS,[f],fillvalue='')) for f in files ]
@@ -48,7 +88,7 @@ class Manifest(object):
                     print(item)
                     raise
 
-    def filter(self):
+    def filter(self, fh=None):
         '''
         filter excel files for those containing variant results
         '''
@@ -56,40 +96,59 @@ class Manifest(object):
         for f in tqdm(self.items):
             try:
                 if not f['sample']:
+                    # attempt to parse
                     v = Excel(f['file'])
-                    if v.fields is not None:
-                        new_manifest.append(f)
+                    # if extractable add to manifest
+                    assert v.fields is not None
+                    new_manifest.append(f)
             except:
-                new_manifest.append(f)
+                # output files that could not be parsed
+                failed_file = os.path.basename(f['file'])
+                print(f'\nCould not parse {failed_file}')
+                if fh:
+                    print(f['file'], file=fh) 
+                else:
+                    # append to manifest if something goes wrong
+                    new_manifest.append(f)
         self.items = new_manifest
 
     def extract(self):
         '''
-        extracts variant information fromo excel files
+        extracts variant information from excel files
         '''
         new_manifest = []
         for f in tqdm(self.items):
-            try:
-                if not f['sample']:
+            if not f['sample']:
+                # try reading excel file
+                try:
                     v = Excel(f['file'])
-                    if v.fields is not None:
-                        for sample in v.fields:
-                            new_f = deepcopy(f)
-                            new_f['sample'] = sample
-                            new_f['request'] = v.fields.loc['request',sample].replace('\n',';')
-                            new_f['result'] = v.fields.loc['result',sample].replace('\n',';')
-                            new_manifest.append(new_f)
-                        print(f'--- {len(new_manifest)} ---')
-            except:
+                    assert v.fields is not None
+                except:
+                    new_manifest.append(f)
+                    continue
+                # put data in manifest
+                for sample in v.fields:
+                    new_f = deepcopy(f)
+                    new_f['sample'] = sample
+                    for field in ROWS.keys():
+                        field_value = v.fields.loc[field, sample] if field in v.fields.index else ''
+                        print(f'FV {field} {field_value}')
+                        try:
+                            new_f[field] = v.fields.loc[field, sample].replace('\n',';') if field in v.fields.index else ''
+                        except:
+                            pass
+                    new_manifest.append(new_f)
+                    print(f'--- {len(new_manifest)} ---')
+            else:
                 new_manifest.append(f)
         self.items = new_manifest
-    
+
     def tidy(self):
         '''
         tidy variants (split multiple)
         '''
         new_manifest = []
-        split_chars = ['&',' and ',';']
+        split_chars = ['&',' and ',';', ' + ']
         tidy_fields = ['request','result']
         for f in tqdm(self.items):
             split_fields = {}
@@ -150,7 +209,6 @@ class Excel(dict):
             if raw_fields is not None:
                 if len(raw_fields.columns):
                     self.fields = raw_fields
-                # convert into variants
     
     def __len__(self):
         return len(self.fields.columns)
@@ -158,7 +216,14 @@ class Excel(dict):
     def _parse_excel(self, file):
         # parse excel file
         try:
-            excel_data = pd.read_excel(file)
+            # excel_data = pd.read_excel(file)
+            # remove first line if empty
+            excel_data_raw = pd.read_excel(file, header=None)
+            first_row_empty = pd.isna(excel_data_raw).all()[[0]]
+            if first_row_empty[0]:
+                excel_data_raw.drop(index=[0],inplace=True)
+            headers = excel_data_raw.iloc[0]
+            excel_data  = pd.DataFrame(excel_data_raw.values[1:], columns=headers)
         except (ValueError):
             print(f' ** ValueError ** {file}')
             return
@@ -172,36 +237,102 @@ class Excel(dict):
             print(f' ** FileNotFoundError ** {file}')
             return
 
-        # get sample columns
+        # batched result (multiple samples as a table with one column per sample)
         cols = [ i for i, col in enumerate(excel_data.columns) 
-            if type(col)==str and re.match(r'NGS\w+_\d+_\w+_\w{2}',col) ]
+            if type(col)==str and re.search(r'NGS[^_]+_\d+_[^_]+_\w{2}',col) ]
         if cols:
+            # get column that indexes the rows (identifies rows with variant result)
+            index_column_index = min(cols)-1
             # aggregate request and result columns
             df = pd.DataFrame([], index=[])
             for row_type, row_names in ROWS.items():
-                index_column = excel_data.columns[min(cols)-1]
-                rows = excel_data.index[excel_data[index_column].isin(row_names) == True]
-                # extract relevant rows
-                try:
-                    result = excel_data.iloc[rows,cols]
-                    result.index = [row_type]
-                except (IndexError, ValueError):
-                    pass  # not unique row
-                else:
-                    df = pd.concat([df,result],axis=0)
-            
-            # cleanup column labels
-            df = df.rename(lambda x: re.sub(r'^(NGS.+Pan\d+_S\d+).*$',r'\1',x), axis=1)
-            # ensure all requested rows were extracted
-            if len(ROWS) == len(df.index):
+                rows = excel_data.index[excel_data.iloc[:,index_column_index].str.match(row_names) == True]
+                if not rows.empty:
+                    result = None
+                    # attempt unique row extraction
+                    if len(rows) == 1:
+                        # print('SINGLE ROW PARSING')
+                        result = parser_unique_row(excel_data, rows, cols, row_type)
+                    # try block extraction if consecutive rows
+                    elif len(rows) == max(rows) - min(rows) + 1:
+                        # print('BLOCK PARSING')
+                        result = parser_block_rows(excel_data, rows, cols, row_type)
+                    else:
+                        # print('NO PARSER')
+                        pass
+                    # amend extracted fields
+                    try:
+                        assert result is not None
+                    except AssertionError:
+                        pass
+                    else:
+                        df = pd.concat([df, result], axis=0)
+
+            # cleanup data
+            if len(df.index):
                 # remove incompatible dtype columns
                 df = df.select_dtypes(exclude=['number','datetime'])
-                # select columns with HGVS.c
+                # select columns with HGVS.c (remove samples with no results)
                 hgvs_cols = [ df[col].str.contains('c\.\d').any() for col in df.columns ]
-                return df.loc[:, hgvs_cols]
-            elif len(df.index):
-                print(f' ==> Check {self.file}')
+                df = df.loc[:, hgvs_cols]
+                # cleanup column labels (retain sample name only)
+                df = df.rename(lambda x: re.sub(r'.*(NGS.+Pan\d+_S\d+).*$',r'\1',x), axis=1)
+                # return extracted/constructed DataFrame
+                return df
 
+        # single sample result file (variant table with separate columns, sample name in filename)
+        m = re.match(r'NGS[^_]+_\d+_[^_]+', os.path.basename(file))
+        if m:
+            # this parser should take into account files with single sample results, it's ugly, it's messy but should capture most cases...
+            # extract full sample names from column header
+            sample = None
+            name_re = re.compile(r'(NGS[^_]+_\d+_[^_]+_[A-Z]{2}_[MFU]_[^_]+_Pan\d+)')
+            # attempt to get unique sample name from header (first line)
+            cols = set([ name_re.match(col).group(1) for col in excel_data.columns if type(col)==str and name_re.match(col) ])
+            if len(cols) == 1:
+                sample = list(cols)[0]
+            # if failed, attempt to extract sample name from file name
+            file_match = name_re.search(os.path.basename(file))
+            if not sample and not cols and file_match:
+                sample = file_match.group(1)
+            # if sample determined (single sample) => extract data 
+            if sample:
+                # find results table (result only)
+                i, j = None, None
+                for i, col in enumerate(excel_data.columns):
+                    j = None
+                    try:
+                        matched_rows = excel_data[col].str.match('(Final|Reported) Result') == True
+                        matched_index = excel_data.index[matched_rows == True]
+                        assert matched_index is not None
+                        assert len(matched_index)==1
+                    except:
+                        pass
+                    else:
+                        j = matched_index[0]
+                        break
+                if i is not None and j is not None:
+                    # find reported variants by line
+                    combined_rows = []
+                    for r in range(j+1,j+10):
+                        if r < excel_data.shape[0]:
+                            concatenated_row = []
+                            for c in range(i,i+3):
+                                if c < excel_data.shape[1]:
+                                    cell = excel_data.iloc[r,c]
+                                    if cell is np.nan:
+                                        break  # empty cell breaks loop
+                                    elif type(cell)==int:
+                                        cell = f'(Class {cell})'  # integers are class number
+                                    concatenated_row.append(cell)
+                            joint_row = ' '.join(concatenated_row)
+                            if is_variant_string(joint_row):
+                                combined_rows.append(joint_row)
+                    # build df
+                    if combined_rows:
+                        df = pd.DataFrame({sample: [';'.join(combined_rows), np.nan ]},index=['result', 'request'])
+                        return df
+    
     def __str__(self):
         rows = []
         if self.fields is not None:

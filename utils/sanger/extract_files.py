@@ -42,7 +42,8 @@ def main(args):
     if args.filter:
         print(f'Filtering files...')
         try:
-            manifest.filter()
+            with open(args.manifest+'.removed','w') as fh:
+                manifest.filter(fh)
         except:
             raise
         finally:
