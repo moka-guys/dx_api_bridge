@@ -74,6 +74,7 @@ class Manifest(object):
         if files:
             # add files to manifest
             self.items += [ dict(zip_longest(self.FIELDS,[f],fillvalue='')) for f in files ]
+        print(f'** Loaded manifest with {len(self.items)} items **')
     
     def __len__(self):
         return len(self.items)
@@ -118,6 +119,7 @@ class Manifest(object):
         '''
         new_manifest = []
         for f in tqdm(self.items):
+            # print(f)
             if not f['sample']:
                 # try reading excel file
                 try:
@@ -132,7 +134,7 @@ class Manifest(object):
                     new_f['sample'] = sample
                     for field in ROWS.keys():
                         field_value = v.fields.loc[field, sample] if field in v.fields.index else ''
-                        print(f'FV {field} {field_value}')
+                        # print(f'FV {field} {field_value}')
                         try:
                             new_f[field] = v.fields.loc[field, sample].replace('\n',';') if field in v.fields.index else ''
                         except:
@@ -250,7 +252,7 @@ class Manifest(object):
         '''unarchive VCF file from DNAnexus (write ids to manifest)'''
         pass
 
-    def extract(self):
+    def extract_vcf(self):
         '''extract variants from VCF files'''
         pass
 
