@@ -6,7 +6,12 @@ import re
 from collections import defaultdict
 import argparse
 from tqdm import tqdm
-import win32com.client
+try:
+    import win32com.client
+except ImportError:
+    print('Assuming POSIX system')
+else:
+    print('Assuming Windows system')
 
 from Variant import Excel, Manifest
 
@@ -68,6 +73,20 @@ def main(args):
         finally:
             manifest.commit()
 
+    # complete variant fields (infer missing fields)
+    if args.complete:
+        genes = set()
+        with open(args.complete) as fh:
+            for line in fh:
+                f = line.split()
+                genes.add(f[0])
+        try:
+            manifest.complete(genes)
+        except:
+            raise
+        finally:
+            manifest.commit()
+    
     # validate variant fields (use supplied gene list)
     if args.validate:
         genes = set()
@@ -128,6 +147,7 @@ if __name__=="__main__":
     parser.add_argument("-f", "--filter", action='store_true', help="Filter excel files for results")
     parser.add_argument("-x", "--extract", action='store_true', help="Extract variants from excel files")
     parser.add_argument("-t", "--tidy", action='store_true', help="Tidy variants (split multiple)")
+    parser.add_argument("-c", "--complete", help="Attempt to infer missing fields (use supplied gene list)")
     parser.add_argument("-v", "--validate", help="Validate variants (supply list of gene symbols)")
     parser.add_argument("-o", "--output", help="output file (default to STDOUT)")
 

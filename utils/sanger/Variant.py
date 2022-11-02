@@ -58,7 +58,7 @@ class Manifest(object):
     '''
     File to parse for variants
     '''
-    FIELDS = ['file','sample','request','result','comments']
+    FIELDS = ['file','sample','request','result','comments','request_genomic','result_genomic']
     SEP = "\t"
     
     def __init__(self, file, files=None):
@@ -67,7 +67,7 @@ class Manifest(object):
         # parse manifest
         if os.path.exists(file):
             with open(file) as fh:
-                for line in fh:
+                for line in tqdm(fh):
                     if not line.startswith('#'):
                         f = line.rstrip().split(self.SEP)
                         self.items.append(dict(zip_longest(self.FIELDS,f,fillvalue='')))
@@ -151,6 +151,7 @@ class Manifest(object):
         split_chars = ['&',' and ',';', ' + ']
         tidy_fields = ['request','result']
         for f in tqdm(self.items):
+            # split fields
             split_fields = {}
             for field in tidy_fields:
                 split_fields[field] = [f[field]]
@@ -167,25 +168,95 @@ class Manifest(object):
                 new_f.update(dict(zip(tidy_fields, variant)))
                 new_manifest.append(new_f)
         self.items = new_manifest
+    
+    def complete(self, genes):
+        '''
+        attempt to fix any errors and complete missing fields from file/path names
+        '''
+        validate_fields = ['request','result']
+        for f in tqdm(self.items):
+            previous_gene = ''  # when gene is defined in request -or- result
+            for field in validate_fields:
+                # remove leading and trailing spaces
+                f[field] = f[field].strip()
+                # get errors
+                v = Variant(f[field], genes)
+                e = v.errors()
+                # fix invalid genes
+                if 'invalid_gene' in e:
+                    # attempt to get gene from file name
+                    if 'CADASIL' in f['file']:
+                        f[field] += ' NOTCH3'
+                    elif 'FGFR3' in f['file']:
+                        f[field] += ' FGFR3'
+                    elif 'DMD' in f['file']:
+                        f[field] += ' DMD'
+                    elif 'CF' in f['file'].split('\\') or 'CFTR' in f['file'].split('\\'):
+                        f[field] += ' CFTR'
+                    # correct common mistakes/deprecations
+                    elif 'KCN1A' in f[field]:
+                        f[field] = f[field].replace('KCN1A','KCNA1')
+                    elif 'MHY2' in f[field]:
+                        f[field] = f[field].replace('MHY2','MYH2')
+                    elif 'MHY7' in f[field]:
+                        f[field] = f[field].replace('MHY7','MYH7')
+                    elif 'CHEK 2' in f[field]:
+                        f[field] = f[field].replace('CHEK 2','CHEK2')
+                    elif 'BRCA 1' in f[field]:
+                        f[field] = f[field].replace('BRCA 1','BRCA1')
+                    elif 'BRCA 2' in f[field]:
+                        f[field] = f[field].replace('BRCA 2','BRCA2')
+                    elif 'ISPD' in f[field]:
+                        f[field] = f[field].replace('ISPD','CRPPA')
+                    elif 'SEPN1' in f[field]:
+                        f[field] = f[field].replace('SEPN1','SELENON')
+                    # attempt to get gene from previous field (request)
+                    elif previous_gene:
+                        f[field] += f' {previous_gene}'
+                    e = Variant(f[field], genes).errors()
+                    if 'invalid_gene' in e:
+                        print('INVALID GENE ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
+                # fix class
+                if 'no_class' in e:
+                    pass
+                    print('NO CLASS ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
+                if 'no_zygosity' in e:
+                    pass
+                    print('NO ZYGOSITY ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
+                previous_gene = v._gene
 
     def validate(self, genes):
         '''adds statment of missing and malformed data (variants)'''
         validate_fields = ['request','result']
-        # only required in single
-        ## gene
-        ## class
-
         error_counts = Counter()
         for f in tqdm(self.items):
             errors = []
             for field in validate_fields:
-                field_data = f[field]
-                v = Variant(field_data, genes)
+                v = Variant(f[field], genes)
                 errors += list(map(lambda e: f'{field}-{e}', v.errors()))
             error_counts.update(errors)
             f['comments'] = "|".join(errors)
         for err, count in error_counts.items():
             print(f'{err}: {count}')
+
+    def genomic(self, genes):
+        '''adds genomic coordinates to variants'''
+        for f in tqdm(self.items):
+            for field in ['request','result']:
+                v = Variant(f[field], genes)
+                f[field+'_genomic'] = v.genomic()
+
+    def unarchive(self):
+        '''unarchive VCF file from DNAnexus (write ids to manifest)'''
+        pass
+
+    def extract(self):
+        '''extract variants from VCF files'''
+        pass
+
+    def assess(self):
+        '''assess variants for TP/TN/FP/FN'''
+        pass
 
 
 class Excel(dict):
@@ -276,7 +347,7 @@ class Excel(dict):
                 hgvs_cols = [ df[col].str.contains('c\.\d').any() for col in df.columns ]
                 df = df.loc[:, hgvs_cols]
                 # cleanup column labels (retain sample name only)
-                df = df.rename(lambda x: re.sub(r'.*(NGS.+Pan\d+_S\d+).*$',r'\1',x), axis=1)
+                df = df.rename(lambda x: re.sub(r'.*\b(NGS\d+.+Pan\d+_S\d+).*$',r'\1',x), axis=1)
                 # return extracted/constructed DataFrame
                 return df
 
@@ -359,16 +430,15 @@ class Variant(object):
             self._zygo = 2 if zg.group(1).lower() == 'hom' else 1  
         # find classification
         self._class = None
-        cl = re.search(r'class\s?(\d+)', cell, re.IGNORECASE)
+        cl = re.search(r'\bc(?:lass)?\s?([1-5])\b', cell, re.IGNORECASE)
         if cl:
             self._class = int(cl.group(1))
         # find gene (match with supplied list of valid symbols)
         self._gene = None
         for gene in genes:
-            if gene in cell and re.search(f'\\b{gene}\\b', cell, re.IGNORECASE):
+            if (gene in cell or gene.lower() in cell) and re.search(f'\\b{gene}\\b', cell, re.IGNORECASE):
                 self._gene = gene
                 break
-
 
     def errors(self):
         errors = []
