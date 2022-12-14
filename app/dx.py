@@ -17,7 +17,7 @@ return current URIs for Data objects (VCF, TBI, BAM, BAI only)
 
 #                        Lib   Cnt   DNA   ID2    INITIALS    Sex        PNm   Pan
 swift_sample_regex = r'((\w+)_(\d+)_(\w+)_(\w+_)?([A-Z]{2}_)?([MFU]x]_)?(\w+)_(Pan\d+))_'
-tso_sample_regex = r'(.+)_UP\d+_.+\.vcf'
+tso_sample_regex = r'(.+)_Pan\d+_.+\.vcf'
 # where to find output files
 DATA_FOLDERS = {
     '/output': swift_sample_regex, 
