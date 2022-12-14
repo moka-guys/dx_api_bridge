@@ -11,6 +11,9 @@ from itertools import zip_longest
 from functools import reduce
 from tqdm import tqdm
 import xlrd
+import pyhgvs as hgvs
+import pyhgvs.utils as hgvs_utils
+from pyfaidx import Fasta
 
 # ROWS = {
 #     'result': ['Final Result', 'Final result', 'Variant 1', 'Variant 2', 'Variant 3'],
@@ -58,7 +61,7 @@ class Manifest(object):
     '''
     File to parse for variants
     '''
-    FIELDS = ['file','sample','request','result','comments','request_genomic','result_genomic']
+    FIELDS = ['file','sample','request','result','comments','acmg_class','gene','hgvsc','af','genomic','fileid','vcf']
     SEP = "\t"
     
     def __init__(self, file, files=None):
@@ -217,14 +220,15 @@ class Manifest(object):
                         f[field] += f' {previous_gene}'
                     e = Variant(f[field], genes).errors()
                     if 'invalid_gene' in e:
-                        print('INVALID GENE ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
+                        pass
+                        # print('INVALID GENE ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
                 # fix class
                 if 'no_class' in e:
                     pass
-                    print('NO CLASS ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
+                    # print('NO CLASS ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
                 if 'no_zygosity' in e:
                     pass
-                    print('NO ZYGOSITY ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
+                    # print('NO ZYGOSITY ({}) in {}'.format(f[field], os.path.basename(f['file'].split('/')[-1])))
                 previous_gene = v._gene
 
     def validate(self, genes):
@@ -241,15 +245,44 @@ class Manifest(object):
         for err, count in error_counts.items():
             print(f'{err}: {count}')
 
-    def genomic(self, genes):
+    def unwrap(self, genes, field):
+        '''unwrap manifest field variants into separate columns and decodes HGVSc into genomic coordinates'''
+        for item in tqdm(self.items):
+            variants = { f: Variant(item[f], genes) for f in ['request','result'] }
+            # common elements
+            acmg_class = set(map(lambda v: v.acmg_class(), variants.values()))
+            if None in acmg_class: acmg_class.remove(None)
+            gene = set(map(lambda v: v.gene(), variants.values()))
+            if None in gene: gene.remove(None)
+            # field elements (validation elements)
+            af = variants[field].af()
+            hgvsc = variants[field].hgvsc()
+            # add unwrapped values
+            if len(acmg_class) <= 1 and len(gene) <= 1:
+                item['acmg_class'] = acmg_class.pop() if acmg_class else None
+                item['gene'] = gene.pop() if gene else None
+                item['af'] = af
+                item['hgvsc'] = hgvsc
+            else:
+                print(acmg_class, gene)
+                print(item)
+                raise Exception('acmg_class and/or gene are not unique -> Correct manually.')
+
+
+    def genomic(self, babelfish):
         '''adds genomic coordinates to variants'''
         for f in tqdm(self.items):
-            for field in ['request','result']:
-                v = Variant(f[field], genes)
-                f[field+'_genomic'] = v.genomic()
+            print(f['gene'], f['hgvsc'])
+            try:
+                chrom, pos, ref, alt, transcript = babelfish.get_genomic(f['gene'], f['hgvsc'])
+            except ValueError:
+                chrom, pos, ref, alt, transcript = None, None, None, None, None
+            print(chrom, pos, ref, alt, transcript)
 
     def unarchive(self):
         '''unarchive VCF file from DNAnexus (write ids to manifest)'''
+        for f in tqdm(self.items):
+            Variant.from_fields(f['request'], f['result']).unarchive(f['file'])
         pass
 
     def extract_vcf(self):
@@ -422,14 +455,15 @@ class Excel(dict):
 class Variant(object):
     def __init__(self, cell, genes=[]):
         self.cell = cell
-
         # get HGVSc
         self._hgvs = re.search(r'(c\.\d+\S+)', cell)
+        # get HGVSp
+        self._hgvsp = re.search(r'(p\.[^\s\)]+)', cell)
         # get zygosity
         self._zygo = None
         zg = re.search(r'(het|hom|hemi)', cell, re.IGNORECASE)
         if zg:
-            self._zygo = 2 if zg.group(1).lower() == 'hom' else 1  
+            self._zygo = 2 if zg.group(1).lower() == 'hom' else 1
         # find classification
         self._class = None
         cl = re.search(r'\bc(?:lass)?\s?([1-5])\b', cell, re.IGNORECASE)
@@ -437,10 +471,21 @@ class Variant(object):
             self._class = int(cl.group(1))
         # find gene (match with supplied list of valid symbols)
         self._gene = None
-        for gene in genes:
-            if (gene in cell or gene.lower() in cell) and re.search(f'\\b{gene}\\b', cell, re.IGNORECASE):
-                self._gene = gene
-                break
+        for element in cell.split(' '):
+            for gene in genes:
+                if (gene in element or gene.lower() in element.lower()) and re.search(f'\\b{gene}\\b', element, re.IGNORECASE):
+                    self._gene = gene
+                    break
+            else:
+                continue  # if no break in inner loop
+            break
+
+    @classmethod
+    def from_fields(cls, gene, hgvsc, af=None, acmg=None):
+        z = 'hom' if af == 1 else 'het'
+        c = f'Class {acmg}' if acmg else ''
+        variantstring = f'{gene} {hgvsc} {z} {c}'
+        return cls(variantstring, [gene])
 
     def errors(self):
         errors = []
@@ -478,9 +523,65 @@ class Variant(object):
         elif str(self) == str(other):
             return 'TP'
     
+    def acmg_class(self):
+        return self._class
+    
     def gene(self):
-        return self._gene.group(1) if self._gene else ''
+        return self._gene
 
-    def hgvs(self):
-        return self._hgvs.group(1) if self._hgvs else ''
+    def af(self):
+        return self._zygo / 2 if self._zygo else None
 
+    def hgvsc(self):
+        return self._hgvs.group(1) if self._hgvs else None
+
+    def hgvsp(self):
+        return self._hgvsp.group(1) if self._hgvsp else None
+
+
+class HGVS(object):
+    def __init__(self, refgene, genome, genetranscripts) -> None:
+        self.genome = Fasta(genome) 
+        with open(refgene) as infile:
+            self.transcripts = hgvs_utils.read_transcripts(infile)
+
+        # read preferred transcripts
+        self.genetranscripts = genetranscripts
+
+    def _get_transcript(self, tx):
+        transcript = self.transcripts.get(tx)
+        if not transcript:
+            # extract transcript (following successive versioning)
+            try:
+                nm, version = tx.split('.')
+            except ValueError as e:
+                nm, version = tx, 1
+            for i in range(int(version),int(version)+10):
+                transcript = self.transcripts.get(f'{nm}.{i}')
+                if transcript:
+                    break
+        return transcript
+
+    def get_genomic(self, transcript, hgvsc):
+        # if only gene known ifer from genomic from preferred transcript list
+        if not transcript.startswith('NM_'):
+            try:
+                transcript_candidates = self.genetranscripts.get(transcript)
+                assert transcript_candidates
+            except AssertionError:
+                raise ValueError(f'No transcript candidates for {transcript}')
+            else:
+                print(transcript_candidates)
+            genomic = list(map(lambda t: hgvs.parse_hgvs_name(f'{t}:{hgvsc}', self.genome, get_transcript=self._get_transcript),
+                transcript_candidates))
+            if len(genomic) > 1:
+                try:
+                    assert len(list(set(genomic))) == 1
+                except AssertionError as e:
+                    print(hgvsc,genomic)
+                    raise Exception('Cannot unambiguously determine transcript from gene name')
+            return *genomic[0], transcript_candidates[0]
+        # return genomic coordinate from single transcript
+        chrom, offset, ref, alt = hgvs.parse_hgvs_name(f'{transcript}:{hgvsc}', self.genome, get_transcript=self._get_transcript)
+        return chrom, offset, ref, alt, self._get_transcript(transcript)
+        # return chrom, offset, ref, alt, transcript

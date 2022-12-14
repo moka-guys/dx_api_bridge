@@ -13,7 +13,7 @@ except ImportError:
 else:
     print('Assuming Windows system')
 
-from Variant import Excel, Manifest
+from Variant import Excel, Manifest, HGVS
 
 def readTarget(f):
     shell = win32com.client.Dispatch("WScript.Shell")
@@ -21,6 +21,24 @@ def readTarget(f):
     return shortcut.TargetPath
 
 def main(args):
+    
+    # read genes (and preferred transcripts)
+    genes, transcripts = set(), defaultdict(list)
+    with open(args.genes) as fh:
+        for line in fh:
+            f = line.split()
+            genes.add(f[0])
+            if len(f) > 1:
+                transcripts[f[0]] += f[1].split(',')
+
+    # load babelfish
+    babelfish = None
+    if args.refgene and args.genome:
+        # load Babelfish
+        print('Loading refgene data...',end='',file=sys.stderr)
+        babelfish = HGVS(args.refgene, args.genome, transcripts)
+        print('DONE',file=sys.stderr)
+
     # add directories to be searched
     excel_files = []
     if args.directory:
@@ -75,11 +93,6 @@ def main(args):
 
     # complete variant fields (infer missing fields)
     if args.complete:
-        genes = set()
-        with open(args.complete) as fh:
-            for line in fh:
-                f = line.split()
-                genes.add(f[0])
         try:
             manifest.complete(genes)
         except:
@@ -89,11 +102,6 @@ def main(args):
     
     # validate variant fields (use supplied gene list)
     if args.validate:
-        genes = set()
-        with open(args.validate) as fh:
-            for line in fh:
-                f = line.split()
-                genes.add(f[0])
         # run variant validation
         try:
             manifest.validate(genes)
@@ -102,54 +110,47 @@ def main(args):
         finally:
             manifest.commit()
     
+    # unwrap variants into fields
+    if args.unwrap:
+        # unwrap and decode HGVS
+        try:
+            manifest.unwrap(genes, args.unwrap)
+        except:
+            raise
+        finally:
+            manifest.commit()
 
-    sys.exit()
-
-    # extract data
-    variants = []
-    sample_count = 0
-    for f in tqdm(excel_files):
-        v = Variants(f)
-        if v.fields is not None:
-            variants.append(v)
-            sample_count += len(v)
-            print(f'--- {sample_count} ---')
-    print(f'=== {sample_count} ===')
-    
-    sys.exit(1)
-    df = pd.DataFrame([],index=[])
-    for sample in data.columns:
-        if type(data[sample]['request']) == str:
-            # get variant and assess FP/FN/TP/TN
-            requested_variant = Variant(data[sample]['request'])
-            confirmed_variant = Variant(data[sample]['result'])
-            result = requested_variant.check_result(confirmed_variant)
-            if requested_variant.hgvs():
-                # get sample name constituents
-                s = re.match(r'(\w+)_(\d+)_(\w+)_(\w{2})_([MFU])_([^_]+)_(Pan\d+)',sample)
-                # get HGVS and transcript (guess)
-                # build data frame
-                df = df.append(pd.DataFrame({
-                    'runid': s.group(0),
-                    'gene': requested_variant.gene(),
-                    'requested': requested_variant.hgvs(),
-                    'confirmed': confirmed_variant.hgvs()
-                }, index=[0]), ignore_index=True)
-    
-    # write output
-    df.to_csv(args.output if args.output else sys.stdout, sep=',', index=False)
+    # decode HGVS
+    if args.genomic:
+        # unwrap and decode HGVS
+        try:
+            manifest.genomic(babelfish)
+        except:
+            raise
+        finally:
+            manifest.commit()
 
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Extracts Sanger results calls from Excel Files (without HGVS conversion)")
-    parser.add_argument("-m", "--manifest", help="Read from MANIFEST", required=True)
+    parser.add_argument("-M", "--manifest", help="Read from MANIFEST", required=True)
+    parser.add_argument("-G", "--genes", help="Read from GENELIST (acceptable gene symbols)", required=False)
+    parser.add_argument("-N", "--genome", help="Reference genome", required=False)
+    parser.add_argument("-R", "--refgene", help="Refgene file for HGVS conversion", required=False)
+    # processing pipeline
     parser.add_argument("-d", "--directory", help="Search Folder containing XLSX")
     parser.add_argument("-f", "--filter", action='store_true', help="Filter excel files for results")
     parser.add_argument("-x", "--extract", action='store_true', help="Extract variants from excel files")
     parser.add_argument("-t", "--tidy", action='store_true', help="Tidy variants (split multiple)")
-    parser.add_argument("-c", "--complete", help="Attempt to infer missing fields (use supplied gene list)")
-    parser.add_argument("-v", "--validate", help="Validate variants (supply list of gene symbols)")
-    parser.add_argument("-o", "--output", help="output file (default to STDOUT)")
+    parser.add_argument("-c", "--complete", action='store_true', help="Attempt to infer missing fields")
+    parser.add_argument("-v", "--validate", action='store_true', help="Validate variants")
+    parser.add_argument("-u", "--unwrap", metavar='FIELD', help="Unwrap variant from FIELD")
+    parser.add_argument("-g", "--genomic", action='store_true', help="Infer genomic coordinates (requires -N and -R")
+
+    parser.add_argument("--vcf_find", metavar='TOKEN', help="Find results VCF file")
+    parser.add_argument("--vcf_unarchive", metavar='TOKEN', help="Unarchive VCF files")
+    parser.add_argument("--vcf_archive", metavar='TOKEN', help="Archive VCF files")
+
 
     args = parser.parse_args()
 

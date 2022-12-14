@@ -11,3 +11,9 @@ Extracts Sanger results from directory containing results in excel format
 ## extract_files.py
 *** DEVELOPMENT ONLY ***
 Counts sanger variant results from directory containing results in excel format
+
+
+
+# Explain extraction pipeline
+
+
