@@ -483,20 +483,41 @@ def main(args,logger):
                         # remove files from archival list if in referenced projects
                         projects_iterator.set_description(f'Excluding files in protected projects ({len(closed_files)})...')
                         safe_files = list(filter(lambda x: x['id'] not in exclude_files, closed_files))
-                        # remove non-live files
+                        # remove non-live (archival/archived) and zero size files
                         projects_iterator.set_description(f'Filtering for live files ({len(safe_files)})...')
-                        live_files = list(filter(lambda x: x['describe']['archivalState'] == 'live', safe_files))
+                        live_files = list(filter(lambda x: x['describe']['archivalState'] == 'live'
+                            and x['describe']['size'] > 0, safe_files))
                         # show archival state
                         if args.dryrun:
                             logger.debug(f'Would archive {len(live_files)} objects in {project["describe"].get("name")}')
                         elif live_files:
-                            logger.warning(f'Archiving {len(live_files)} objects in {project["describe"].get("name")}')
+                            logger.info(f'Archiving {len(live_files)} objects in {project["describe"].get("name")}')
                             # archive files in chunks (max 1000 per API call)
-                            files = list(map(lambda x: x['id'], live_files))
-                            chunks = [files[i:i + 1000] for i in range(0, len(files), 1000)]
+                            chunks = [live_files[i:i + 1000] for i in range(0, len(live_files), 1000)]
                             for i, chunk in enumerate(chunks):
                                 projects_iterator.set_description(f'Archiving file chunk {i+1}/{len(chunks)} of {project["describe"]["name"]}...')
-                                dxpy.api.project_archive(project['id'], input_params={ 'files': chunk, 'allCopies': args.all }, always_retry=True)
+                                files = list(map(lambda x: x['id'], chunk))
+                                try:
+                                    dxpy.api.project_archive(project['id'],
+                                        input_params={ 'files': files, 'allCopies': args.all },
+                                        always_retry=True)
+                                except Exception as e:
+                                    # Any exception in the batch operation will run the batch as individual operations
+                                    # e.g. archive as much as you can
+                                    logger.warning(f'Error in batch operation, running as separate tasks...')
+                                    for f in chunk:
+                                        try:
+                                            dxpy.api.project_archive(project['id'],
+                                                input_params={ 'files': [ f['id'] ], 'allCopies': args.all },
+                                                always_retry=True)
+                                        except dxpy.exceptions.PermissionDenied:
+                                            logger.warning(f'Cannot archive {f["id"]} (Permission Denied).')
+                                        except dxpy.exceptions.InvalidState:
+                                            logger.warning(f'Cannot archive {f["id"]} (Invalid State).')
+                                        except Exception as ee:
+                                            logger.fatal(f'Something prevented the following data object to be archived:')
+                                            print(f)
+                                            raise ee
 
                     # rename project
                     if args.rename:
