@@ -1,7 +1,7 @@
-FROM debian:buster
+FROM debian:bullseye
 LABEL maintainer="dbrawand@nhs.net"
 RUN apt-get update && apt-get -y upgrade
-RUN apt-get -y install less make wget vim curl python3-dev python3-pip
+RUN apt-get -y install libffi-dev less make wget vim curl python3-dev python3-pip
 RUN mkdir /logs
 WORKDIR /app
 COPY requirements.txt .
