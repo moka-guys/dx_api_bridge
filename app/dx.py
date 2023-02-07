@@ -17,11 +17,13 @@ return current URIs for Data objects (VCF, TBI, BAM, BAI only)
 
 #                        Lib   Cnt   DNA   ID2    INITIALS    Sex        PNm   Pan
 swift_sample_regex = r'((\w+)_(\d+)_(\w+)_(\w+_)?([A-Z]{2}_)?([MFU]x]_)?(\w+)_(Pan\d+))_'
-tso_sample_regex = r'(.+)_Pan\d+_.+\.vcf'
+tso_sample_regex = r'(.+_Pan\d+)_.+\.vcf'
+tso_sample_regex_bw = r'(.+_Pan\d+)\.bam\.bw'
 # where to find output files
 DATA_FOLDERS = {
-    '/output': swift_sample_regex, 
-    '/analysis_folder/Results': tso_sample_regex
+    '/output': swift_sample_regex,
+    '/analysis_folder/Results': tso_sample_regex,
+    '/bigwig_output': tso_sample_regex_bw,
 }
 # Validity of generated URLs
 URL_HOURS = 12
@@ -30,7 +32,7 @@ URL_HOURS = 12
 def get_sample_name(filename):
     '''
     Get sample name from filename
-    
+
     Args:
         filename (str): filename
 
@@ -93,7 +95,7 @@ class Dx(object):
                     })
             return objects
         return list(dxpy.bindings.search.find_data_objects(name=name, name_mode=mode, *args, **kwargs))
-    
+
     def find_projects(self, name, mode='glob', *args, **kwargs):
         '''
         Finds all projects matching the given name
@@ -112,7 +114,7 @@ class Dx(object):
     def find_files(self, name, mode='glob', *args, **kwargs):
         '''
         Finds all files matching the given name
-        
+
         Args:
             name (str): name of the file to find
             mode (str): mode of the search, can be 'glob', 'regex', 'exact'
@@ -143,8 +145,10 @@ class Dx(object):
         files = []
         for folder in matched_folders:
             # sample_regex
-            found_files = dxpy.bindings.search.find_data_objects(classname='file', state='closed', visibility='visible', \
-                name=DATA_FOLDERS[folder], name_mode=u'regexp', project=project_id, folder=folder, recurse=True, \
+            found_files = dxpy.bindings.search.find_data_objects(
+                classname='file', state='closed', visibility='visible',
+                name=DATA_FOLDERS[folder], name_mode=u'regexp',
+                project=project_id, folder=folder, recurse=True,
                 describe=True)
             files += list(found_files)
         # return files
@@ -213,7 +217,7 @@ class Dx(object):
     def archive(self, project_id, file_id, all_copies=False):
         '''
         Archives a file
-        
+
         Args:
             project_id (str): id of the project
             file_id (str): id of the file
@@ -238,7 +242,7 @@ class Dx(object):
             **kwargs: keyword arguments to pass to the update function
 
         Returns:
-            None                    
+            None
         '''
         project = dxpy.bindings.dxproject.DXProject(dxid=project_id)
         project.update(**kwargs)
