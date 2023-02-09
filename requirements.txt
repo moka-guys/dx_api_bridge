@@ -1,4 +1,3 @@
-argcomplete==2.0.0
 certifi==2022.12.7
 cffi==1.15.1
 chardet==4.0.0
@@ -10,12 +9,12 @@ Flask==2.0.3
 gnureadline==8.0.0
 gunicorn==20.1.0
 idna==3.4
-importlib-metadata==4.8.3
-itsdangerous==2.0.1
-Jinja2==3.0.3
-MarkupSafe==2.0.1
-numpy==1.24.1
-pandas==1.1.5
+importlib-metadata==5.1.0
+itsdangerous==2.1.2
+Jinja2==3.1.2
+MarkupSafe==2.1.1
+numpy==1.21.6
+pandas==1.3.5
 psutil==5.9.4
 pycparser==2.21
 pyfaidx==0.6.4
