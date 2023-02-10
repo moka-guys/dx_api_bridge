@@ -17,12 +17,14 @@ return current URIs for Data objects (VCF, TBI, BAM, BAI only)
 
 #                        Lib   Cnt   DNA   ID2    INITIALS    Sex        PNm   Pan
 swift_sample_regex = r'((\w+)_(\d+)_(\w+)_(\w+_)?([A-Z]{2}_)?([MFU]x]_)?(\w+)_(Pan\d+))_'
-tso_sample_regex = r'(.+_Pan\d+)_.+\.vcf'
+tso_sample_regex_vcf = r'(.+_Pan\d+)_.+\.vcf'
+tso_sample_regex_bam = r'(.+_Pan\d+).+\.ba[mi]'
 tso_sample_regex_bw = r'(.+_Pan\d+)\.bam\.bw'
 # where to find output files
 DATA_FOLDERS = {
     '/output': swift_sample_regex,
-    '/analysis_folder/Results': tso_sample_regex,
+    '/analysis_folder/Results': tso_sample_regex_vcf,
+    '/analysis_folder/Logs_Intermediates/StitchedRealigned': tso_sample_regex_bam,
     '/bigwig_output': tso_sample_regex_bw,
 }
 # Validity of generated URLs
