@@ -271,6 +271,12 @@ class Manifest(object):
 
     def genomic(self, babelfish):
         '''adds genomic coordinates to variants'''
+
+        raise NotImplementedError
+        ''' this is not fully implemented.
+        it does not yet write the extracted data into separate columns nor write the manifest
+        '''
+
         for f in tqdm(self.items):
             print(f['gene'], f['hgvsc'])
             try:

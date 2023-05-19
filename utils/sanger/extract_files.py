@@ -13,7 +13,7 @@ except ImportError:
 else:
     print('Assuming Windows system')
 
-from Variant import Excel, Manifest, HGVS
+from sangerlib import Manifest, HGVS
 
 def readTarget(f):
     shell = win32com.client.Dispatch("WScript.Shell")
@@ -21,7 +21,6 @@ def readTarget(f):
     return shortcut.TargetPath
 
 def main(args):
-    
     # read genes (and preferred transcripts)
     genes, transcripts = set(), defaultdict(list)
     with open(args.genes) as fh:

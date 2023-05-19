@@ -8,13 +8,14 @@ import csv
 import argparse
 import pandas as pd
 from dxpy.exceptions import InvalidAuthentication
-from app.dx import *
+from dxlib import Dx
 import pysam
 import pyhgvs as hgvs
 import pyhgvs.utils as hgvs_utils
 from pyfaidx import Fasta
 from tqdm.auto import tqdm
 from functools import cache
+
 SAMPLE_COLUMN = 'Run Name'
 CHROM_COLUMN = 'Chr'
 GDOT_COLUMN = 'genomics'
@@ -58,27 +59,6 @@ class DataFile(object):
 
     def commit(self,outfile=None):
         return self.data.to_csv(outfile if outfile else self.file, index=False)
-
-"""HGVS translator"""
-class HGVS(object):
-    def __init__(self, refgene, genome) -> None:
-        self.genome = Fasta(genome) 
-        with open(refgene) as infile:
-            self.transcripts = hgvs_utils.read_transcripts(infile)
-
-    def _get_transcript(self, tx):
-        transcript = self.transcripts.get(tx)
-        if not transcript:
-            nm, version = tx.split('.')
-            for i in range(int(version),int(version)+10):
-                transcript = self.transcripts.get(f'{nm}.{i}')
-                if transcript:
-                    break
-        return transcript
-
-    def get_genomic(self, hgvs_name):
-        chrom, offset, ref, alt = hgvs.parse_hgvs_name(hgvs_name, self.genome, get_transcript=self._get_transcript)
-        return chrom, offset, ref, alt
 
 
 def get_vcf_record(row, dx):
