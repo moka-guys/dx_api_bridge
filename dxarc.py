@@ -525,7 +525,7 @@ def main(args,logger):
                         if args.dryrun:
                             logger.debug(f'Would rename project {project["describe"]["name"]} to {new_project_name}')
                         else:
-                            logger.warning(f'Renaming {project["describe"]["name"]} to {new_project_name}')
+                            logger.info(f'Renaming {project["describe"]["name"]} to {new_project_name}')
                             dx.update_project(project['id'], name=new_project_name)
 
 
